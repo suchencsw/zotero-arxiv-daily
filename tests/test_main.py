@@ -50,6 +50,7 @@ def test_main_debug_logging(config, monkeypatch):
     class FakeExecutor:
         def __init__(self, cfg):
             pass
+
         def run(self):
             pass
 
