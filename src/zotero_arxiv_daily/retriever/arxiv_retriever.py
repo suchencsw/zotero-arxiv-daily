@@ -167,10 +167,9 @@ class ArxivRetriever(BaseRetriever):
         bar = tqdm(total=len(all_paper_ids))
         max_batch_retries = 5
         batch_retry_delay = 30
-        retryable_statuses = (406, 429, 503)
-
         for i in range(0, len(all_paper_ids), 20):
-            search = arxiv.Search(id_list=all_paper_ids[i:i + 20])
+            batch_ids = all_paper_ids[i:i + 20]
+            search = arxiv.Search(id_list=batch_ids)
 
             for attempt in range(max_batch_retries):
                 try:
@@ -180,18 +179,44 @@ class ArxivRetriever(BaseRetriever):
                     break
 
                 except arxiv.HTTPError as exc:
-                    if (
-                        exc.status in retryable_statuses
-                        and attempt < max_batch_retries - 1
-                    ):
-                        wait = batch_retry_delay * (attempt + 1)
+                    if exc.status == 429:
+                        if attempt < max_batch_retries - 1:
+                            wait = batch_retry_delay * (attempt + 1)
+                            logger.warning(
+                                f"arXiv API 429 on batch {i // 20}, "
+                                f"retry {attempt + 1}/{max_batch_retries} in {wait}s"
+                            )
+                            sleep(wait)
+                            continue
                         logger.warning(
-                            f"arXiv API {exc.status} on batch {i // 20}, "
-                            f"retry {attempt + 1}/{max_batch_retries} in {wait}s"
+                            f"arXiv API 429 on batch {i // 20} after "
+                            f"{max_batch_retries} retries. "
+                            "Falling back to per-paper requests."
                         )
-                        sleep(wait)
                     else:
-                        raise
+                        logger.warning(
+                            f"arXiv API error on batch {i // 20} "
+                            f"(status {exc.status}). "
+                            "Falling back to per-paper requests."
+                        )
+
+                    batch = []
+                    for index, paper_id in enumerate(batch_ids):
+                        try:
+                            batch.extend(
+                                list(client.results(arxiv.Search(id_list=[paper_id])))
+                            )
+                        except arxiv.HTTPError as paper_exc:
+                            logger.warning(
+                                f"Skipping arXiv paper {paper_id} due to API error "
+                                f"status {paper_exc.status}"
+                            )
+                        if index + 1 < len(batch_ids):
+                            sleep(1)
+
+                    bar.update(len(batch))
+                    raw_papers.extend(batch)
+                    break
 
             # Respect arXiv API request frequency.
             if i + 20 < len(all_paper_ids):
