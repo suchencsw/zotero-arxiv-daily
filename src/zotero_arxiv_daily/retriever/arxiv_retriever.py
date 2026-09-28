@@ -13,6 +13,9 @@ from time import sleep
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
+import html
+import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 T = TypeVar("T")
 
@@ -49,6 +52,28 @@ def _run_with_hard_timeout(
     operation: str,
     paper_title: str,
 ) -> T | None:
+    # Windows' spawn startup imports the full scientific stack in every child;
+    # that alone can exceed short operation timeouts. Network helpers already
+    # have request-level timeouts, so use a non-blocking worker thread there.
+    if os.name == "nt":
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(func, *args)
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeoutError:
+            logger.warning(
+                f"{operation} timed out for {paper_title} after {timeout} seconds"
+            )
+            return None
+        except Exception as exc:
+            logger.warning(
+                f"{operation} failed for {paper_title}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return None
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     start_methods = multiprocessing.get_all_start_methods()
     context = multiprocessing.get_context(
         "fork" if "fork" in start_methods else start_methods[0]
@@ -135,9 +160,7 @@ class ArxivRetriever(BaseRetriever):
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
 
-    def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=10)
-
+    def _retrieve_raw_papers(self) -> list[Any]:
         query = "+".join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get(
             "include_cross_list",
@@ -145,106 +168,74 @@ class ArxivRetriever(BaseRetriever):
         )
 
         # Get the latest paper from arXiv RSS feed.
-        feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
-        if "Feed error for query" in feed.feed.title:
+        feed_url = f"https://rss.arxiv.org/atom/{query}"
+        feed = feedparser.parse(feed_url)
+        feed_title = str(feed.feed.get("title", ""))
+        if "Feed error for query" in feed_title:
             raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+        if getattr(feed, "bozo", False) and not feed.entries:
+            raise RuntimeError(
+                f"Failed to parse arXiv RSS feed {feed_url}: "
+                f"{getattr(feed, 'bozo_exception', 'unknown feed error')}"
+            )
 
-        raw_papers = []
         allowed_announce_types = (
             {"new", "cross"} if include_cross_list else {"new"}
         )
+        raw_papers = []
+        seen_ids = set()
+        for item in feed.entries:
+            if item.get("arxiv_announce_type", "new") not in allowed_announce_types:
+                continue
+            paper_id = str(item.get("id", "")).removeprefix("oai:arXiv.org:")
+            canonical_id = re.sub(r"v\d+$", "", paper_id)
+            if not canonical_id or canonical_id in seen_ids:
+                continue
+            seen_ids.add(canonical_id)
+            raw_papers.append(item)
 
-        all_paper_ids = [
-            item.id.removeprefix("oai:arXiv.org:")
-            for item in feed.entries
-            if item.get("arxiv_announce_type", "new") in allowed_announce_types
-        ]
-
+        max_candidates = max(
+            1,
+            int(self.config.executor.get("max_candidate_num", 100) or 100),
+        )
         if self.config.executor.debug:
-            all_paper_ids = all_paper_ids[:10]
+            max_candidates = min(max_candidates, 10)
+        selected = raw_papers[:max_candidates]
+        logger.info(
+            f"arXiv RSS returned {len(raw_papers)} unique announcements; "
+            f"using {len(selected)} candidates"
+        )
+        return selected
 
-        # Get full information of each paper from arXiv API.
-        bar = tqdm(total=len(all_paper_ids))
-        max_batch_retries = 5
-        batch_retry_delay = 30
-        for i in range(0, len(all_paper_ids), 20):
-            batch_ids = all_paper_ids[i:i + 20]
-            search = arxiv.Search(id_list=batch_ids)
+    def convert_to_paper(self, raw_paper: Any) -> Paper:
+        """Convert RSS metadata directly, avoiding hundreds of API/download calls."""
 
-            for attempt in range(max_batch_retries):
-                try:
-                    batch = list(client.results(search))
-                    bar.update(len(batch))
-                    raw_papers.extend(batch)
-                    break
-
-                except arxiv.HTTPError as exc:
-                    if exc.status == 429:
-                        if attempt < max_batch_retries - 1:
-                            wait = batch_retry_delay * (attempt + 1)
-                            logger.warning(
-                                f"arXiv API 429 on batch {i // 20}, "
-                                f"retry {attempt + 1}/{max_batch_retries} in {wait}s"
-                            )
-                            sleep(wait)
-                            continue
-                        logger.warning(
-                            f"arXiv API 429 on batch {i // 20} after "
-                            f"{max_batch_retries} retries. "
-                            "Falling back to per-paper requests."
-                        )
-                    else:
-                        logger.warning(
-                            f"arXiv API error on batch {i // 20} "
-                            f"(status {exc.status}). "
-                            "Falling back to per-paper requests."
-                        )
-
-                    batch = []
-                    for index, paper_id in enumerate(batch_ids):
-                        try:
-                            batch.extend(
-                                list(client.results(arxiv.Search(id_list=[paper_id])))
-                            )
-                        except arxiv.HTTPError as paper_exc:
-                            logger.warning(
-                                f"Skipping arXiv paper {paper_id} due to API error "
-                                f"status {paper_exc.status}"
-                            )
-                        if index + 1 < len(batch_ids):
-                            sleep(1)
-
-                    bar.update(len(batch))
-                    raw_papers.extend(batch)
-                    break
-
-            # Respect arXiv API request frequency.
-            if i + 20 < len(all_paper_ids):
-                sleep(3)
-
-        bar.close()
-        return raw_papers
-
-    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
-        title = raw_paper.title
-        authors = [author.name for author in raw_paper.authors]
-        abstract = raw_paper.summary
-        pdf_url = raw_paper.pdf_url
-
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
+        paper_id = str(raw_paper.get("id", "")).removeprefix("oai:arXiv.org:")
+        title = html.unescape(str(raw_paper.get("title", ""))).strip()
+        author_text = html.unescape(str(raw_paper.get("author", ""))).strip()
+        authors = [name.strip() for name in author_text.split(",") if name.strip()]
+        abstract = html.unescape(str(raw_paper.get("summary", ""))).strip()
+        abstract = re.sub(
+            r"^arXiv:\S+\s+Announce Type:\s*\S+\s+Abstract:\s*",
+            "",
+            abstract,
+            flags=re.IGNORECASE,
+        )
+        abstract = re.sub(r"\s+", " ", abstract).strip()
+        url = str(raw_paper.get("link", "") or f"https://arxiv.org/abs/{paper_id}")
+        pdf_url = f"https://arxiv.org/pdf/{paper_id}"
 
         return Paper(
             source=self.name,
             title=title,
             authors=authors,
             abstract=abstract,
-            url=raw_paper.entry_id,
+            url=url,
             pdf_url=pdf_url,
-            full_text=full_text,
+            # Abstracts are sufficient for similarity ranking and Chinese TLDR.
+            # Downloading every candidate's source/PDF previously made Actions
+            # runs last for six hours before cancellation.
+            full_text=None,
         )
 
 

@@ -20,47 +20,59 @@ def _raise_runtime_error() -> None:
 
 def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
-
-    # The RSS fixture gives us paper IDs.  After feedparser, the code calls
-    # arxiv.Client().results(search) which makes real HTTP requests.  We mock
-    # the arxiv Client so the test stays offline.
-    new_entries = [
+    allowed_announce_types = (
+        {"new", "cross"}
+        if config.source.arxiv.include_cross_list
+        else {"new"}
+    )
+    expected_entries = [
         e for e in mock_feedparser.entries
-        if e.get("arxiv_announce_type", "new") == "new"
+        if e.get("arxiv_announce_type", "new") in allowed_announce_types
     ]
-    paper_ids = [e.id.removeprefix("oai:arXiv.org:") for e in new_entries]
-
-    # Build fake ArxivResult-like objects matching each RSS entry
-    fake_results = []
-    for entry in new_entries:
-        pid = entry.id.removeprefix("oai:arXiv.org:")
-        fake_results.append(SimpleNamespace(
-            title=entry.title,
-            authors=[SimpleNamespace(name="Test Author")],
-            summary="Test abstract",
-            pdf_url=f"https://arxiv.org/pdf/{pid}",
-            entry_id=f"https://arxiv.org/abs/{pid}",
-            source_url=lambda pid=pid: f"https://arxiv.org/e-print/{pid}",
-        ))
-
-    class FakeClient:
-        def __init__(self, **kw):
-            pass
-        def results(self, search):
-            return iter(fake_results)
-
-    monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
-
-    # Skip file downloads in convert_to_paper
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", lambda paper: None)
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", lambda paper: None)
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", lambda paper: None)
 
     retriever = ArxivRetriever(config)
     papers = retriever.retrieve_papers()
 
-    assert len(papers) == len(new_entries)
-    assert set(p.title for p in papers) == set(e.title for e in new_entries)
+    assert len(papers) == len(expected_entries)
+    assert set(p.title for p in papers) == set(e.title for e in expected_entries)
+
+
+def test_arxiv_rss_caps_candidates_without_calling_export_api(config, monkeypatch):
+    entries = [
+        {
+            "id": f"oai:arXiv.org:2609.{index:05d}v1",
+            "title": f"Paper {index}",
+            "author": "Author One, Author Two",
+            "summary": (
+                f"arXiv:2609.{index:05d}v1 Announce Type: new\n"
+                f"Abstract: Abstract {index}"
+            ),
+            "link": f"https://arxiv.org/abs/2609.{index:05d}v1",
+            "arxiv_announce_type": "new",
+        }
+        for index in range(150)
+    ]
+    feed = SimpleNamespace(
+        feed={"title": "cs.AI updates on arXiv.org"},
+        entries=entries,
+        bozo=False,
+    )
+    monkeypatch.setattr(arxiv_retriever.feedparser, "parse", lambda _url: feed)
+    monkeypatch.setattr(
+        arxiv_retriever.arxiv,
+        "Client",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API must not be called")),
+    )
+
+    retriever = ArxivRetriever(config)
+    raw = retriever._retrieve_raw_papers()
+    paper = retriever.convert_to_paper(raw[0])
+
+    assert len(raw) == 100
+    assert paper.abstract == "Abstract 0"
+    assert paper.authors == ["Author One", "Author Two"]
+    assert paper.pdf_url == "https://arxiv.org/pdf/2609.00000v1"
+    assert paper.full_text is None
 
 
 def test_run_with_hard_timeout_returns_value():

@@ -16,12 +16,26 @@ llm:
     base_url: ${oc.env:OPENAI_API_BASE}
   api_mode: chat_completion
   generation_kwargs:
-    model: gpt-4o-mini
+    model: deepseek-ai/DeepSeek-V4-Flash
+    max_tokens: 512
+  language: Chinese
 
 source:
   arxiv:
-    category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
+    category: ["cs.AI","cs.LG","cs.CV","cs.RO","cs.GR"]
+    include_cross_list: true
+
+reranker:
+  api:
+    key: ${oc.env:OPENAI_API_KEY}
+    base_url: ${oc.env:OPENAI_API_BASE}
+    model: BAAI/bge-m3
+    batch_size: 64
 
 executor:
   debug: ${oc.env:DEBUG,null}
   source: ['arxiv']
+  max_candidate_num: 100
+  max_paper_num: 20
+  send_empty: false
+  reranker: api

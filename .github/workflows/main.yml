@@ -2,17 +2,24 @@ name: Send emails daily
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 22 * * *'
+    # 03:17 UTC = 11:17 Asia/Shanghai.  The previous early run happened
+    # before the weekday arXiv announcement feed was populated.
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zotero-arxiv-daily-email
+  cancel-in-progress: false
 
 jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          repository: ${{ vars.REPOSITORY }}
-          ref: ${{ vars.REF }}
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
@@ -28,6 +35,14 @@ jobs:
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
+          test -n "$ZOTERO_ID"
+          test -n "$ZOTERO_KEY"
+          test -n "$SENDER"
+          test -n "$RECEIVER"
+          test -n "$SENDER_PASSWORD"
+          test -n "$OPENAI_API_KEY"
+          test -n "$OPENAI_API_BASE"
+          test -n "$CUSTOM_CONFIG"
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           echo "Use custom config: "
           cat config/custom.yaml
