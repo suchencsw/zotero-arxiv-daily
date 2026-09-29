@@ -33,7 +33,7 @@ jobs:
           SHOULD_RUN=true
           if [ "${{ github.event_name }}" = "schedule" ]; then
             TODAY_UTC="$(date -u +%F)"
-            if RUNS_JSON="$(gh api "repos/$REPOSITORY/actions/workflows/main.yml/runs?event=schedule&status=success&per_page=30")"; then
+            if RUNS_JSON="$(gh api "repos/$REPOSITORY/actions/workflows/main.yml/runs?status=success&per_page=30")"; then
               PREVIOUS_SUCCESS="$(
                 printf '%s' "$RUNS_JSON" | jq -r \
                   --arg today "$TODAY_UTC" \
