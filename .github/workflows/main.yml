@@ -2,12 +2,16 @@ name: Send emails daily
 on:
   workflow_dispatch:
   schedule:
-    # 03:17 UTC = 11:17 Asia/Shanghai.  The previous early run happened
-    # before the weekday arXiv announcement feed was populated.
+    # GitHub scheduled events are best-effort and can occasionally be dropped.
+    # Try at 11:17, 11:47, and 12:17 Asia/Shanghai; the guard below ensures
+    # that only the first successful run of the day sends an email.
     - cron: '17 3 * * *'
+    - cron: '47 3 * * *'
+    - cron: '17 4 * * *'
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: zotero-arxiv-daily-email
@@ -18,13 +22,45 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Check whether today's delivery already succeeded
+        id: delivery_guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          SHOULD_RUN=true
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TODAY_UTC="$(date -u +%F)"
+            if RUNS_JSON="$(gh api "repos/$REPOSITORY/actions/workflows/main.yml/runs?event=schedule&status=success&per_page=30")"; then
+              PREVIOUS_SUCCESS="$(
+                printf '%s' "$RUNS_JSON" | jq -r \
+                  --arg today "$TODAY_UTC" \
+                  --argjson current "$CURRENT_RUN_ID" \
+                  '.workflow_runs[] | select(.id != $current and .conclusion == "success" and (.created_at | startswith($today))) | .id' \
+                  | head -n 1
+              )"
+              if [ -n "$PREVIOUS_SUCCESS" ]; then
+                SHOULD_RUN=false
+                echo "A scheduled email run already succeeded today: $PREVIOUS_SUCCESS"
+              fi
+            else
+              echo "::warning::Could not inspect prior runs; continuing with delivery."
+            fi
+          fi
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
+        if: steps.delivery_guard.outputs.should_run == 'true'
         uses: actions/checkout@v6
 
       - name: Setup uv
+        if: steps.delivery_guard.outputs.should_run == 'true'
         uses: astral-sh/setup-uv@v7
 
       - name: Run script
+        if: steps.delivery_guard.outputs.should_run == 'true'
         env:
           ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
           ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
