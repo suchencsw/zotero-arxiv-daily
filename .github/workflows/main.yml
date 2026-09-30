@@ -2,12 +2,13 @@ name: Send emails daily
 on:
   workflow_dispatch:
   schedule:
-    # GitHub scheduled events are best-effort and can occasionally be dropped.
-    # Try at 11:17, 11:47, and 12:17 Asia/Shanghai; the guard below ensures
-    # that only the first successful run of the day sends an email.
+    # GitHub scheduled events are best-effort and can occasionally be delayed
+    # or dropped. Spread attempts across the day (Asia/Shanghai 11:17, 15:17,
+    # 19:17, and 23:17); the guard below allows only one successful delivery.
     - cron: '17 3 * * *'
-    - cron: '47 3 * * *'
-    - cron: '17 4 * * *'
+    - cron: '17 7 * * *'
+    - cron: '17 11 * * *'
+    - cron: '17 15 * * *'
 
 permissions:
   contents: read
