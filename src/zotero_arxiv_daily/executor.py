@@ -1,3 +1,4 @@
+import re
 from loguru import logger
 from pyzotero import zotero
 from omegaconf import DictConfig, ListConfig
@@ -11,6 +12,41 @@ from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
+
+
+ARXIV_ID_RE = re.compile(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.IGNORECASE)
+
+
+def _zotero_deduplication_key(item: dict) -> str:
+    """Build the same DOI/arXiv/title identity used by PaperFlow."""
+    data = item.get("data") or {}
+    doi = str(data.get("DOI") or "").strip().casefold()
+    if doi:
+        return f"doi:{doi}"
+
+    identifier_text = " ".join(
+        str(data.get(field) or "")
+        for field in ("url", "extra", "DOI")
+    )
+    if match := ARXIV_ID_RE.search(identifier_text):
+        return f"arxiv:{match.group(1)}"
+
+    normalized_title = re.sub(r"\W+", "", str(data.get("title") or "").casefold())
+    return f"title:{normalized_title}" if normalized_title else ""
+
+
+def deduplicate_zotero_items(items: list[dict]) -> list[dict]:
+    """Keep the first (newest) record for each DOI, arXiv ID, or title."""
+    unique_items = []
+    seen = set()
+    for item in items:
+        key = _zotero_deduplication_key(item)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique_items.append(item)
+    return unique_items
 
 
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
@@ -44,8 +80,27 @@ class Executor:
         zot = zotero.Zotero(self.config.zotero.user_id, 'user', self.config.zotero.api_key)
         collections = zot.everything(zot.collections())
         collections = {c['key']:c for c in collections}
-        corpus = zot.everything(zot.items(itemType='conferencePaper || journalArticle || preprint'))
-        corpus = [c for c in corpus if c['data']['abstractNote'] != '']
+        raw_corpus = zot.everything(zot.items(
+            itemType='conferencePaper || journalArticle || preprint',
+            sort='dateAdded',
+            direction='desc',
+        ))
+        eligible_corpus = [
+            item
+            for item in raw_corpus
+            if str((item.get('data') or {}).get('title') or '').strip()
+            and str((item.get('data') or {}).get('abstractNote') or '').strip()
+        ]
+        corpus = deduplicate_zotero_items(eligible_corpus)
+        logger.info(
+            "Fetched {} Zotero records: {} eligible, {} unique papers "
+            "({} blank records and {} duplicates removed)",
+            len(raw_corpus),
+            len(eligible_corpus),
+            len(corpus),
+            len(raw_corpus) - len(eligible_corpus),
+            len(eligible_corpus) - len(corpus),
+        )
         def get_collection_path(col_key:str) -> str:
             if p := collections[col_key]['data']['parentCollection']:
                 return get_collection_path(p) + '/' + collections[col_key]['data']['name']
@@ -54,7 +109,6 @@ class Executor:
         for c in corpus:
             paths = [get_collection_path(col) for col in c['data']['collections']]
             c['paths'] = paths
-        logger.info(f"Fetched {len(corpus)} zotero papers")
         return [CorpusPaper(
             title=c['data']['title'],
             abstract=c['data']['abstractNote'],

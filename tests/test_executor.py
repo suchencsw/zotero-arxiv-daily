@@ -5,7 +5,11 @@ from datetime import datetime
 import pytest
 from omegaconf import OmegaConf
 
-from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
+from zotero_arxiv_daily.executor import (
+    Executor,
+    deduplicate_zotero_items,
+    normalize_path_patterns,
+)
 from zotero_arxiv_daily.protocol import CorpusPaper
 
 
@@ -104,6 +108,62 @@ def test_filter_corpus_no_filters_returns_all():
 # ---------------------------------------------------------------------------
 
 
+def _zotero_item(title, *, doi="", url="", extra=""):
+    return {
+        "data": {
+            "title": title,
+            "abstractNote": f"Abstract for {title}",
+            "DOI": doi,
+            "url": url,
+            "extra": extra,
+            "dateAdded": "2026-03-01T00:00:00Z",
+            "collections": [],
+        }
+    }
+
+
+def test_deduplicate_zotero_items_matches_paperflow_identity_rules():
+    items = [
+        _zotero_item("Newest DOI record", doi="10.1000/EXAMPLE"),
+        _zotero_item("Older DOI record", doi="10.1000/example"),
+        _zotero_item("Newest arXiv record", url="https://arxiv.org/abs/2601.01234v2"),
+        _zotero_item("Older arXiv record", extra="arXiv: 2601.01234v1"),
+        _zotero_item("Same title: punctuation!"),
+        _zotero_item("Same title punctuation"),
+        _zotero_item("Independent paper"),
+    ]
+
+    unique = deduplicate_zotero_items(items)
+
+    assert [item["data"]["title"] for item in unique] == [
+        "Newest DOI record",
+        "Newest arXiv record",
+        "Same title: punctuation!",
+        "Independent paper",
+    ]
+
+
+def test_fetch_zotero_corpus_removes_blank_and_duplicate_records(config, monkeypatch):
+    from tests.canned_responses import make_stub_zotero_client
+
+    blank = _zotero_item("Blank abstract")
+    blank["data"]["abstractNote"] = ""
+    items = [
+        _zotero_item("Newest copy", doi="10.1000/duplicate"),
+        _zotero_item("Older copy", doi="10.1000/DUPLICATE"),
+        _zotero_item("Unique paper"),
+        blank,
+    ]
+    stub_zot = make_stub_zotero_client(items=items)
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    executor = Executor.__new__(Executor)
+    executor.config = config
+    corpus = executor.fetch_zotero_corpus()
+
+    assert [paper.title for paper in corpus] == ["Newest copy", "Unique paper"]
+
+
 def test_fetch_zotero_corpus(config, monkeypatch):
     from tests.canned_responses import make_stub_zotero_client
 
@@ -155,7 +215,6 @@ def test_run_end_to_end(config, monkeypatch):
     from omegaconf import open_dict
 
     from tests.canned_responses import (
-        make_sample_corpus,
         make_sample_paper,
         make_stub_openai_client,
         make_stub_smtp,
