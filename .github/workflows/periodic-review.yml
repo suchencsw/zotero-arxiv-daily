@@ -58,6 +58,7 @@ jobs:
           key: periodic-public-v1-${{ github.run_id }}
           restore-keys: periodic-public-v1-
       - name: Recall complete periods with current Zotero and deliver
+        id: worker
         env:
           REVIEW_KIND: ${{ inputs.kind || 'auto' }}
           REVIEW_END: ${{ inputs.end || '' }}
@@ -69,7 +70,7 @@ jobs:
           if [ "$REVIEW_VERIFY" = true ]; then args+=(--dry-run); fi
           python scripts/periodic_review.py "${args[@]}"
       - name: Preserve checkpoints even if an external API fails
-        if: always() && hashFiles('outputs/periodic-cache/public.sqlite') != ''
+        if: always() && steps.worker.outputs.cache_dirty == 'true' && hashFiles('outputs/periodic-cache/public.sqlite') != ''
         uses: actions/cache/save@v4
         with:
           path: outputs/periodic-cache

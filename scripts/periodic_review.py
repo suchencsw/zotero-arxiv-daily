@@ -756,19 +756,27 @@ def main():
         if periods[0].key in state["completed"] and not args.dry_run:
             periods = []
     print("Due periods: " + json.dumps([p.key for p in periods]))
-    if args.plan_only:
+    if args.plan_only or not periods:
         return
     deadline = time.monotonic() + 75 * 60
+    cache_created = not Path("outputs/periodic-cache/public.sqlite").exists()
     cache = PublicCache("outputs/periodic-cache/public.sqlite")
-    for period in periods:
-        try:
-            execute_period(period, cache, ledger, args.channel, args.dry_run, deadline)
-        except DeadlineReached:
-            print(f"Checkpointed unfinished {period.key}; NOT delivered/complete. Next scheduled run resumes.")
-            with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
-                f.write(f"Pending {period.key}: checkpoint saved, full scan not complete, no delivery claimed.\n")
-            break
-    cache.db.close()
+    try:
+        for period in periods:
+            try:
+                execute_period(period, cache, ledger, args.channel, args.dry_run, deadline)
+            except DeadlineReached:
+                print(f"Checkpointed unfinished {period.key}; NOT delivered/complete. Next scheduled run resumes.")
+                with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as f:
+                    f.write(f"Pending {period.key}: checkpoint saved, full scan not complete, no delivery claimed.\n")
+                break
+    finally:
+        # Do not re-upload a potentially gigabyte-sized annual cache on every
+        # idle retry. Still checkpoint real progress when an API raises.
+        if cache_created or cache.db.total_changes:
+            with open(os.environ.get("GITHUB_OUTPUT", os.devnull), "a", encoding="utf-8") as f:
+                f.write("cache_dirty=true\n")
+        cache.db.close()
 
 
 if __name__ == "__main__":
