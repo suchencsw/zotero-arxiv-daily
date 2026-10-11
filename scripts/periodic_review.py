@@ -33,7 +33,7 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 OPEN = "{http://a9.com/-/spec/opensearch/1.1/}"
 BRANCH = "recommendation-state"
 STATE_FILE = "periodic-ledger.json"
-CACHE_SCHEMA = "submitted-bj-v1"
+CACHE_SCHEMA = "submitted-bj-v2"
 MODEL = "BAAI/bge-m3"
 
 
@@ -326,6 +326,7 @@ class PublicCache:
         self.db = sqlite3.connect(path)
         self.db.execute("CREATE TABLE IF NOT EXISTS papers (id TEXT PRIMARY KEY, day TEXT, metadata TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS days (scope TEXT, day TEXT, PRIMARY KEY(scope, day))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS membership (scope TEXT, id TEXT, PRIMARY KEY(scope, id))")
         self.db.execute("CREATE TABLE IF NOT EXISTS vectors (id TEXT, model TEXT, digest TEXT, vector BLOB, PRIMARY KEY(id, model))")
         self.db.execute("CREATE TABLE IF NOT EXISTS gates (id TEXT, profile TEXT, allowed INTEGER, PRIMARY KEY(id, profile))")
         self.db.commit()
@@ -346,6 +347,8 @@ class PublicCache:
                     for p in papers:
                         self.db.execute("INSERT OR REPLACE INTO papers VALUES (?,?,?)",
                                         (p["arxiv_id"], str(day), json.dumps(p)))
+                        self.db.execute("INSERT OR REPLACE INTO membership VALUES (?,?)",
+                                        (scan_scope, p["arxiv_id"]))
                     self.db.execute("INSERT INTO days VALUES (?,?)", (scan_scope, str(day)))
                 print(f"Complete public metadata day {day}: {len(papers)} papers", flush=True)
             day += timedelta(days=1)
@@ -358,8 +361,9 @@ class PublicCache:
                                    (self.scope + ":" + period.key, str(day))).fetchone():
                 raise RuntimeError("Incomplete period metadata: no delivery permitted")
         rows = [json.loads(row[0]) for row in self.db.execute(
-            "SELECT metadata FROM papers WHERE day>=? AND day<? ORDER BY id",
-            (str(period.start), str(period.end)))]
+            "SELECT p.metadata FROM papers p JOIN membership m ON p.id=m.id "
+            "WHERE m.scope=? AND p.day>=? AND p.day<? ORDER BY p.id",
+            (self.scope + ":" + period.key, str(period.start), str(period.end)))]
         return [p for p in rows if set(p["categories"]) & set(self.categories)]
 
     def vectors(self, papers, embed, deadline):

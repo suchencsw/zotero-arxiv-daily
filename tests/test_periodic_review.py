@@ -196,6 +196,19 @@ def test_only_chinese_tldr_rendered_and_explicit_historical_scope():
     assert "1200" in result and "7.1235" in result and "Latest direction" in result
     assert p["url"] in result and p["pdf_url"] in result
 
+def test_period_snapshot_excludes_records_no_longer_in_new_query(tmp_path):
+    cache = W.PublicCache(tmp_path / "cache.sqlite", ["cs.CV"])
+    start, end = date(2026, 10, 1), date(2026, 10, 2)
+    week, month = W.Period("week", start, end), W.Period("month", start, end)
+    first = SimpleNamespace(day=lambda *a: [paper(1), paper(2)])
+    second = SimpleNamespace(day=lambda *a: [paper(2)])
+    cache.ensure_period(week, first, float("inf"))
+    cache.ensure_period(month, second, float("inf"))
+    assert len(cache.papers(week)) == 2
+    assert [p["arxiv_id"] for p in cache.papers(month)] == ["2610.00002"]
+    cache.db.close()
+
+
 
 def test_gate_scans_below_first_100_and_never_fills_weak(monkeypatch):
     from scripts import periodic_relevance
