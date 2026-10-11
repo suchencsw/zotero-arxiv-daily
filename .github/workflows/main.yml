@@ -40,6 +40,8 @@ jobs:
       EMAIL_DELIVERY_RECEIPT: outputs/smtp-receipt.json
       EMAIL_PREVIEW_PATH: outputs/email-preview.html
       ARXIV_BATCH_TRACKING: "true"
+      # Preserve the currently configured email RSS scopes and their query order.
+      ARXIV_BATCH_CATEGORIES: "cs.AI,cs.LG,cs.CV,cs.RO,cs.GR"
       ARXIV_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
     steps:
       - name: Checkout

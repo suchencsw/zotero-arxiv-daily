@@ -156,3 +156,42 @@ def test_persisted_queue_file_is_separate_from_periodic_ledger():
     ledger = Q.Ledger('owner/repo',state_file='announcement-ledger.json')
     assert ledger.state_file == 'announcement-ledger.json'
     assert Q.Ledger('owner/repo').state_file == 'periodic-ledger.json'
+
+
+def test_prepare_persists_public_snapshot_before_ranking_without_sending(monkeypatch,tmp_path):
+    state = {'schema_version':1,'batches':{},'completed':{},'sent':{}}
+    files = {}
+    class FakeLedger:
+        def __init__(self, **kwargs): pass
+        def load(self): return copy.deepcopy(state),'state_sha'
+        def update(self, change):
+            change(state)
+            return copy.deepcopy(state)
+        def api(self, path, payload=None, **kwargs):
+            if path.startswith('actions/workflows/'):
+                return {'workflow_runs':[]}
+            filename = path.removeprefix('contents/').split('?')[0]
+            if payload is not None:
+                files[filename] = {'content':payload['content'],'encoding':'base64'}
+                return {}
+            if filename not in files:
+                raise Q.urllib.error.HTTPError('test',404,'missing',{},None)
+            return files[filename]
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self,*args): return xml().encode()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('GITHUB_OUTPUT',str(tmp_path/'output'))
+    monkeypatch.setenv('GITHUB_ENV',str(tmp_path/'env'))
+    monkeypatch.setenv('GITHUB_RUN_ID','99')
+    monkeypatch.setattr(Q,'Ledger',FakeLedger)
+    monkeypatch.setattr(Q.urllib.request,'urlopen',lambda *a,**kw:Response())
+    Q.prepare('email')
+    assert 'should_run=true' in (tmp_path/'output').read_text('utf8')
+    snapshot = json.loads((tmp_path/'data/selected-announcement.json').read_text('utf8'))
+    assert snapshot['announcement_date'] == '2026-10-12'
+    assert snapshot['batch_id'] in state['batches']
+    assert not state['batches'][snapshot['batch_id']].get('completed_at')
+    assert len(files) == 1  # snapshot persisted before ranking/sending
+    assert 'ARXIV_BATCH_DATE=2026-10-12' in (tmp_path/'env').read_text('utf8')

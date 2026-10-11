@@ -15,6 +15,9 @@ from pathlib import Path
 
 from periodic_review import Ledger, BRANCH, CATEGORIES
 
+CATEGORIES = tuple(filter(None, os.environ.get('ARXIV_BATCH_CATEGORIES', ','.join(CATEGORIES)).split(',')))
+if not CATEGORIES or any(not re.fullmatch(r'[a-z][\w.-]*', c) for c in CATEGORIES):
+    raise ValueError('Invalid configured arXiv categories')
 BJ = timezone(timedelta(hours=8))
 A = '{http://www.w3.org/2005/Atom}'
 AR = '{http://arxiv.org/schemas/atom}'

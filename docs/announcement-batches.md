@@ -2,7 +2,7 @@
 
 日报不再把“今天已发送过任何论文”当作停止条件，不按北京时间昨日提交日期切片。
 
-1. 每次请求配置的八类 arXiv Atom RSS，保留 new/cross、排除 replacement，使用 entry.published 的公告批次日期标签。feed.updated 是生成时间，不作为批次日期。
+1. 每次请求原有配置分类的 arXiv Atom RSS（邮件五类、飞书八类，未扩展日报范围），保留 new/cross、排除 replacement，使用 entry.published 的公告批次日期标签。feed.updated 是生成时间，不作为批次日期。以后更改日报分类时，需同步 workflow 的 ARXIV_BATCH_CATEGORIES 与来源配置。
 2. 每批最多 100 篇候选。邮件保持原有 RSS 顺序取前 100 篇，飞书保持方向覆盖召回；两边各自排序策略不变，每批最多 30 篇。
 3. 在 recommendation-state 分支持久保存公共元数据快照与 announcement-ledger.json 索引。发送失败的已观察批次留在队列，后续运行优先处理最早未完成批次。
 4. 只有 SMTP 接受或飞书全部分片 API 接受后才标记完成。回执含公告日期、批次 ID、模式和实际发送时间。即使跨午夜也不会重复把同一批次当新论文；历史复盘也不会阻塞新的批次。
