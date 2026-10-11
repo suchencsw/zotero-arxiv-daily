@@ -6,12 +6,15 @@ from .utils import glob_match
 from .retriever import get_retriever_cls
 from .protocol import CorpusPaper
 import random
+import os
+from pathlib import Path
 from datetime import datetime
 from .reranker import get_reranker_cls
 from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
+from .delivery import write_delivery_receipt
 
 
 ARXIV_ID_RE = re.compile(r"(?<!\d)(\d{4}\.\d{4,5})(?:v\d+)?(?!\d)", re.IGNORECASE)
@@ -148,8 +151,7 @@ class Executor:
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
-            logger.error(f"No zotero papers found. Please check your zotero settings:\n{self.config.zotero}")
-            return
+            raise RuntimeError("No eligible Zotero papers found; refusing a misleading successful delivery")
         all_papers = []
         for source, retriever in self.retrievers.items():
             logger.info(f"Retrieving {source} papers...")
@@ -172,7 +174,19 @@ class Executor:
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
             return
+        elif os.environ.get("EMAIL_EMPTY_ALREADY_SENT") == "true":
+            logger.info("No new announcements; today's empty-status email already acknowledged. Retry remains available.")
+            return
         logger.info("Sending email...")
         email_content = render_email(reranked_papers)
+        preview = os.environ.get("EMAIL_PREVIEW_PATH")
+        if preview:
+            target = Path(preview)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(email_content, encoding="utf-8")
+        if os.environ.get("EMAIL_DRY_RUN") == "true":
+            logger.info("Verification only: no SMTP request and no successful delivery receipt")
+            return
         send_email(self.config, email_content)
+        write_delivery_receipt(reranked_papers, len(all_papers), len(corpus))
         logger.info("Email sent successfully")

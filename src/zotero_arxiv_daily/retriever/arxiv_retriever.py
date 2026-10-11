@@ -15,6 +15,8 @@ from loguru import logger
 import requests
 import html
 import re
+import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 T = TypeVar("T")
@@ -161,6 +163,29 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[Any]:
+        recovery = os.environ.get("EMAIL_RECOVERY_BATCH", "")
+        if recovery:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", recovery):
+                raise ValueError("Recovery batch must be YYYY-MM-DD")
+            snapshot = Path(__file__).resolve().parents[3] / "recovery" / f"arxiv-{recovery}.json"
+            data = json.loads(snapshot.read_text(encoding="utf-8"))
+            if not data.get("papers") or any(p.get("publish_date") != recovery for p in data["papers"]):
+                raise RuntimeError("Recovery requires dated, real arXiv announcement metadata")
+            rows = []
+            seen = set()
+            for paper in data["papers"]:
+                identifier = str(paper["arxiv_id"])
+                if not re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", identifier) or not paper.get("abstract", "").strip():
+                    raise RuntimeError("Invalid recovery paper identifier or empty abstract")
+                canonical = re.sub(r"v\d+$", "", identifier)
+                if canonical in seen:
+                    continue
+                seen.add(canonical)
+                rows.append({"id": identifier, "title": paper["title"], "summary": paper["abstract"],
+                             "author": ", ".join(paper.get("authors", [])), "link": f"https://arxiv.org/abs/{identifier}"})
+            limit = min(100, max(1, int(self.config.executor.get("max_candidate_num", 100))))
+            logger.info("Historical recovery batch {}: {} real candidates (not today's new papers)", recovery, min(len(rows), limit))
+            return rows[:limit]
         query = "+".join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get(
             "include_cross_list",
@@ -170,6 +195,8 @@ class ArxivRetriever(BaseRetriever):
         # Get the latest paper from arXiv RSS feed.
         feed_url = f"https://rss.arxiv.org/atom/{query}"
         feed = feedparser.parse(feed_url)
+        if int(getattr(feed, "status", 200) or 200) >= 400:
+            raise RuntimeError("arXiv RSS HTTP failure; not a valid empty announcement batch")
         feed_title = str(feed.feed.get("title", ""))
         if "Feed error for query" in feed_title:
             raise Exception(f"Invalid ARXIV_QUERY: {query}.")

@@ -1,14 +1,23 @@
 name: Send emails daily
 on:
   workflow_dispatch:
+    inputs:
+      recovery_batch:
+        description: "Optional saved announcement batch YYYY-MM-DD, explicitly marked historical"
+        required: false
+        default: ""
+      verify_only:
+        description: "Fetch and rank with current Zotero, without sending email"
+        type: boolean
+        default: false
+      force_send:
+        description: "Explicitly resend even if SMTP delivery was already acknowledged"
+        type: boolean
+        default: false
   schedule:
-    # GitHub scheduled events are best-effort and can occasionally be delayed
-    # or dropped. Spread attempts across the day (Asia/Shanghai 11:17, 15:17,
-    # 19:17, and 23:17); the guard below allows only one successful delivery.
-    - cron: '17 3 * * *'
-    - cron: '17 7 * * *'
-    - cron: '17 11 * * *'
-    - cron: '17 15 * * *'
+    # Re-register the schedule; four cloud attempts, no local watchdog.
+    # GitHub scheduling remains best-effort, not a guaranteed timer.
+    - cron: '23 3,7,11,15 * * *'
 
 permissions:
   contents: read
@@ -22,45 +31,29 @@ jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
+      EMAIL_RECOVERY_BATCH: ${{ inputs.recovery_batch || '' }}
+      EMAIL_DRY_RUN: ${{ inputs.verify_only && 'true' || 'false' }}
+      EMAIL_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
+      EMAIL_DELIVERY_RECEIPT: outputs/smtp-receipt.json
+      EMAIL_PREVIEW_PATH: outputs/email-preview.html
     steps:
-      - name: Check whether today's delivery already succeeded
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check actual SMTP delivery for the Beijing date
         id: delivery_guard
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          CURRENT_RUN_ID: ${{ github.run_id }}
-        run: |
-          SHOULD_RUN=true
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            TODAY_UTC="$(date -u +%F)"
-            if RUNS_JSON="$(gh api "repos/$REPOSITORY/actions/workflows/main.yml/runs?status=success&per_page=30")"; then
-              PREVIOUS_SUCCESS="$(
-                printf '%s' "$RUNS_JSON" | jq -r \
-                  --arg today "$TODAY_UTC" \
-                  --argjson current "$CURRENT_RUN_ID" \
-                  '.workflow_runs[] | select(.id != $current and .conclusion == "success" and (.created_at | startswith($today))) | .id' \
-                  | head -n 1
-              )"
-              if [ -n "$PREVIOUS_SUCCESS" ]; then
-                SHOULD_RUN=false
-                echo "A scheduled email run already succeeded today: $PREVIOUS_SUCCESS"
-              fi
-            else
-              echo "::warning::Could not inspect prior runs; continuing with delivery."
-            fi
-          fi
-          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout
-        if: steps.delivery_guard.outputs.should_run == 'true'
-        uses: actions/checkout@v6
+        run: python scripts/email_delivery_guard.py
 
       - name: Setup uv
         if: steps.delivery_guard.outputs.should_run == 'true'
         uses: astral-sh/setup-uv@v7
 
-      - name: Run script
+      - name: Fetch current Zotero, rank papers and send email
         if: steps.delivery_guard.outputs.should_run == 'true'
         env:
           ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
@@ -71,6 +64,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+          EMAIL_EMPTY_ALREADY_SENT: ${{ steps.delivery_guard.outputs.empty_already_sent }}
         run: |
           test -n "$ZOTERO_ID"
           test -n "$ZOTERO_KEY"
@@ -81,6 +75,39 @@ jobs:
           test -n "$OPENAI_API_BASE"
           test -n "$CUSTOM_CONFIG"
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
-          echo "Use custom config: "
-          cat config/custom.yaml
-          uv run src/zotero_arxiv_daily/main.py
+          # Never print resolved configuration or credentials into logs.
+          uv run src/zotero_arxiv_daily/main.py executor.send_empty=true
+
+      - name: Preserve the SMTP acknowledgement
+        if: always() && hashFiles('outputs/smtp-receipt.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: email-smtp-receipt
+          path: outputs/smtp-receipt.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Preserve rendered email for diagnosis
+        if: always() && hashFiles('outputs/email-preview.html') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: email-preview
+          path: outputs/email-preview.html
+          retention-days: 7
+
+      - name: Summarize actual delivery state
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          receipt = Path("outputs/smtp-receipt.json")
+          if receipt.exists():
+              data = json.loads(receipt.read_text())
+              text = f"SMTP accepted: {data['kind']}, {data['paper_count']} papers, Beijing date {data['beijing_date']}. Server acceptance does not prove inbox arrival."
+          else:
+              text = "No new SMTP acknowledgement: skipped, dry-run, or failed. A green workflow is not proof of a new email."
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(text + '\n')
+          print(text)
+          PY

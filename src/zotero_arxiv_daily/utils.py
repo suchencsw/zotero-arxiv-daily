@@ -9,6 +9,8 @@ from email.mime.text import MIMEText
 from email.utils import parseaddr, formataddr
 from loguru import logger
 import datetime
+import os
+from zoneinfo import ZoneInfo
 from omegaconf import DictConfig
 import pymupdf
 import pymupdf.layout
@@ -152,8 +154,10 @@ def send_email(config:DictConfig, html:str):
     msg = MIMEText(html, 'html', 'utf-8')
     msg['From'] = _format_addr('Github Action <%s>' % sender)
     msg['To'] = _format_addr('You <%s>' % receiver)
-    today = datetime.datetime.now().strftime('%Y/%m/%d')
-    msg['Subject'] = Header(f'Daily arXiv {today}', 'utf-8').encode()
+    today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).strftime('%Y/%m/%d')
+    batch = os.environ.get("EMAIL_RECOVERY_BATCH", "")
+    subject = f"Daily arXiv {today}" if not batch else f"arXiv 历史批次补发 · {batch}"
+    msg['Subject'] = Header(subject, 'utf-8').encode()
 
     # Port 465 expects implicit TLS from the first byte. Trying STARTTLS first
     # can hang or be rejected by QQ Mail before the SSL fallback is reached.
@@ -177,4 +181,9 @@ def send_email(config:DictConfig, html:str):
         if refused:
             raise RuntimeError(f"SMTP server refused recipients: {refused}")
     finally:
-        server.quit()
+        try:
+            server.quit()
+        except Exception:
+            # SMTP acceptance is already final; a failed QUIT must not cause
+            # retries of an accepted message or hide the original send error.
+            logger.warning("SMTP connection cleanup failed; acceptance result is unchanged")

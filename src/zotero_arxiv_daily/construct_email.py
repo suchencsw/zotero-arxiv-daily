@@ -1,5 +1,7 @@
 from .protocol import Paper
 import math
+import os
+import html
 
 
 framework = """
@@ -45,7 +47,8 @@ def get_empty_html():
   <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
   <tr>
     <td style="font-size: 20px; font-weight: bold; color: #333;">
-        No Papers Today. Take a Rest!
+        今日未检索到新的 arXiv 公告，邮件任务运行正常。<br>
+        这不代表没有人提交论文，也不代表你的研究方向没有相关文献。后续定时尝试仍会检查新公告。
     </td>
   </tr>
   </table>
@@ -106,6 +109,9 @@ def get_stars(score:float):
 
 def render_email(papers:list[Paper]) -> str:
     parts = []
+    batch = os.environ.get("EMAIL_RECOVERY_BATCH", "")
+    if batch:
+        parts.append(f'<h2>历史批次补发 · {html.escape(batch)}</h2><p>以下来自该日真实 arXiv 公告元数据，按本次读取的 Zotero 文献库重新排序；不是今日新论文。</p>')
     if len(papers) == 0 :
         return framework.replace('__CONTENT__', get_empty_html())
     
