@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "timezone": "Asia/Shanghai",
-  "checked_through": "2026-10-11T17:10:00+08:00",
+  "checked_through": "2026-10-11T17:04:00+08:00",
   "notices": {
     "2026-10-10": {
       "kind": "missed_empty_notification_backfill",
