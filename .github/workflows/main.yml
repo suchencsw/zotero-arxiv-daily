@@ -17,7 +17,7 @@ on:
   schedule:
     # Re-register the schedule; four cloud attempts, no local watchdog.
     # GitHub scheduling remains best-effort, not a guaranteed timer.
-    - cron: '23 3,7,11,15 * * *'
+    - cron: '23 1,5,9,13 * * *'
 
 permissions:
   contents: write
@@ -39,15 +39,22 @@ jobs:
       EMAIL_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
       EMAIL_DELIVERY_RECEIPT: outputs/smtp-receipt.json
       EMAIL_PREVIEW_PATH: outputs/email-preview.html
+      ARXIV_BATCH_TRACKING: "true"
+      ARXIV_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Check actual SMTP delivery for the Beijing date
+      - name: Queue public announcement batches and retry unfinished delivery
         id: delivery_guard
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/email_delivery_guard.py
+        run: |
+          if [ -n "$EMAIL_RECOVERY_BATCH" ]; then
+            python scripts/email_delivery_guard.py
+          else
+            python scripts/announcement_batches.py --channel email
+          fi
 
       - name: Setup uv
         if: steps.delivery_guard.outputs.should_run == 'true'
@@ -76,7 +83,7 @@ jobs:
           test -n "$CUSTOM_CONFIG"
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           # Never print resolved configuration or credentials into logs.
-          uv run src/zotero_arxiv_daily/main.py executor.send_empty=true
+          uv run src/zotero_arxiv_daily/main.py executor.send_empty=false
 
       - name: Preserve the SMTP acknowledgement
         if: always() && hashFiles('outputs/smtp-receipt.json') != ''
@@ -86,6 +93,12 @@ jobs:
           path: outputs/smtp-receipt.json
           retention-days: 30
           if-no-files-found: error
+
+      - name: Record confirmed announcement batch delivery
+        if: always() && hashFiles('outputs/smtp-receipt.json') != '' && env.ARXIV_BATCH_ID != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/announcement_batches.py --channel email --record outputs/smtp-receipt.json
 
       - name: Record recommended IDs for future period recall
         if: always() && hashFiles('outputs/smtp-receipt.json') != ''

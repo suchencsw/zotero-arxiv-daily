@@ -166,11 +166,15 @@ class Executor:
         if len(all_papers) > 0:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
-            reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
+            limit = 5 if os.environ.get("ARXIV_BATCH_MODE") == "review" else self.config.executor.max_paper_num
+            reranked_papers = reranked_papers[:limit]
             logger.info("Generating TLDR and affiliations...")
             for p in tqdm(reranked_papers):
                 p.generate_tldr(self.openai_client, self.config.llm)
                 p.generate_affiliations(self.openai_client, self.config.llm)
+        elif os.environ.get("ARXIV_BATCH_TRACKING") == "true":
+            logger.info("No public announcement candidates; quiet retry, no empty email")
+            return
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
             return

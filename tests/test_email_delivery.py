@@ -135,3 +135,56 @@ def test_historical_email_is_labeled(config, monkeypatch):
     from tests.canned_responses import make_sample_paper
     monkeypatch.setenv("EMAIL_RECOVERY_BATCH", "2026-10-09")
     assert "不是今日新论文" in render_email([make_sample_paper()])
+
+
+def test_queued_email_consumes_frozen_batch_not_live_feed(config, monkeypatch, tmp_path):
+    from zotero_arxiv_daily.retriever.arxiv_retriever import ArxivRetriever
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps({"batch_id": "rss:2026-10-12:scope", "candidates": [
+        {"arxiv_id": "2610.11815", "title": "Navigation", "abstract": "Real abstract",
+         "authors": ["Author"], "url": "https://arxiv.org/abs/2610.11815", "publish_date": "2026-10-12"}
+    ]}), encoding="utf8")
+    monkeypatch.setenv("ARXIV_BATCH_PATH", str(path))
+    monkeypatch.setenv("ARXIV_BATCH_ID", "rss:2026-10-12:scope")
+    monkeypatch.setenv("ARXIV_BATCH_DATE", "2026-10-12")
+    monkeypatch.delenv("EMAIL_RECOVERY_BATCH", raising=False)
+    monkeypatch.setattr("zotero_arxiv_daily.retriever.arxiv_retriever.feedparser.parse",
+                        lambda *a: pytest.fail("Queued delivery refetched changing RSS"))
+    assert ArxivRetriever(config)._retrieve_raw_papers()[0]["summary"] == "Real abstract"
+    monkeypatch.setenv("ARXIV_BATCH_DATE", "2026-10-13")
+    with pytest.raises(RuntimeError, match="metadata"):
+        ArxivRetriever(config)._retrieve_raw_papers()
+
+
+def test_batch_heading_and_review_are_not_send_date(monkeypatch):
+    from zotero_arxiv_daily.construct_email import render_email
+    from tests.canned_responses import make_sample_paper
+    monkeypatch.delenv("EMAIL_RECOVERY_BATCH", raising=False)
+    monkeypatch.setenv("ARXIV_BATCH_DATE", "2026-10-09")
+    monkeypatch.setenv("ARXIV_BATCH_MODE", "review")
+    text = render_email([make_sample_paper()])
+    assert "历史批次复盘 · 2026-10-09" in text
+    assert "不是提交日期或邮件发送日期" in text
+
+
+def test_batch_tracking_never_sends_premature_empty_email(config, monkeypatch, tmp_path):
+    ex, receipt = setup_executor(config, monkeypatch, tmp_path, [])
+    monkeypatch.setenv("ARXIV_BATCH_TRACKING", "true")
+    monkeypatch.setattr("zotero_arxiv_daily.executor.send_email", lambda *a: pytest.fail("Empty spam"))
+    ex.run()
+    assert not receipt.exists()
+
+
+def test_review_limits_to_five_and_records_batch_not_date_guard(config, monkeypatch, tmp_path):
+    papers = [SimpleNamespace(title=f"Nav {i}", url=f"https://arxiv.org/abs/2610.{i:05}", score=7-i/10,
+                             generate_tldr=lambda *a: None, generate_affiliations=lambda *a: None) for i in range(30)]
+    ex, receipt = setup_executor(config, monkeypatch, tmp_path, papers)
+    monkeypatch.setenv("ARXIV_BATCH_MODE", "review")
+    monkeypatch.setenv("ARXIV_BATCH_ID", "rss:2026-10-09:scope")
+    monkeypatch.setenv("ARXIV_BATCH_DATE", "2026-10-09")
+    monkeypatch.setenv("ARXIV_REVIEW_KEY", "review:2026-10-12:rss:2026-10-09:scope")
+    monkeypatch.setattr("zotero_arxiv_daily.executor.send_email", lambda *a: None)
+    ex.run()
+    r = json.loads(receipt.read_text(encoding="utf8"))
+    assert r["paper_count"] == 5 and r["announcement_date"] == "2026-10-09"
+    assert r["announcement_mode"] == "review"

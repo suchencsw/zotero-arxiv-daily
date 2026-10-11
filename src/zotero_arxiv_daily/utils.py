@@ -157,6 +157,9 @@ def send_email(config:DictConfig, html:str):
     today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).strftime('%Y/%m/%d')
     batch = os.environ.get("EMAIL_RECOVERY_BATCH", "")
     subject = f"Daily arXiv {today}" if not batch else f"arXiv 历史批次补发 · {batch}"
+    if os.environ.get("ARXIV_BATCH_DATE") and not batch:
+        label = "历史批次复盘" if os.environ.get("ARXIV_BATCH_MODE") == "review" else "公告批次推荐"
+        subject = f"arXiv {label} · {os.environ['ARXIV_BATCH_DATE']}"
     msg['Subject'] = Header(subject, 'utf-8').encode()
 
     # Port 465 expects implicit TLS from the first byte. Trying STARTTLS first

@@ -120,8 +120,9 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 class Ledger:
     """Durable hash-only ledger on a dedicated branch, CAS merged on conflicts."""
 
-    def __init__(self, repository=None):
+    def __init__(self, repository=None, *, state_file=STATE_FILE):
         self.repository = repository or os.environ["GITHUB_REPOSITORY"]
+        self.state_file = state_file
         if not re.fullmatch(r"[\w.-]+/[\w.-]+", self.repository):
             raise ValueError("Invalid repository")
 
@@ -141,7 +142,7 @@ class Ledger:
 
     def load(self):
         try:
-            file = self.api(f"contents/{STATE_FILE}?ref={BRANCH}")
+            file = self.api(f"contents/{self.state_file}?ref={BRANCH}")
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise
@@ -174,7 +175,7 @@ class Ledger:
             if sha:
                 payload["sha"] = sha
             try:
-                self.api(f"contents/{STATE_FILE}", payload, method="PUT")
+                self.api(f"contents/{self.state_file}", payload, method="PUT")
                 return state
             except urllib.error.HTTPError as exc:
                 if exc.code not in (409, 422) or attempt == 4:

@@ -163,6 +163,19 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[Any]:
+        queued = os.environ.get("ARXIV_BATCH_PATH", "")
+        if queued and not os.environ.get("EMAIL_RECOVERY_BATCH"):
+            data = json.loads(Path(queued).read_text(encoding="utf-8"))
+            if data.get("batch_id") != os.environ.get("ARXIV_BATCH_ID"):
+                raise RuntimeError("Announcement batch identity mismatch")
+            rows = data.get("candidates", [])
+            if not 1 <= len(rows) <= 100 or any(
+                not p.get("abstract") or p.get("publish_date") != os.environ.get("ARXIV_BATCH_DATE")
+                for p in rows
+            ):
+                raise RuntimeError("Invalid queued announcement metadata")
+            return [{"id": p["arxiv_id"], "title": p["title"], "summary": p["abstract"],
+                     "author": ", ".join(p.get("authors", [])), "link": p["url"]} for p in rows]
         recovery = os.environ.get("EMAIL_RECOVERY_BATCH", "")
         if recovery:
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", recovery):

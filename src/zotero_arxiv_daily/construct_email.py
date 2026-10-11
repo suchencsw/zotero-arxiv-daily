@@ -109,6 +109,12 @@ def get_stars(score:float):
 
 def render_email(papers:list[Paper]) -> str:
     parts = []
+    announcement = os.environ.get("ARXIV_BATCH_DATE", "")
+    if announcement:
+        review = os.environ.get("ARXIV_BATCH_MODE") == "review"
+        label = "历史批次复盘" if review else "公开公告批次推荐"
+        parts.append(f'<h2>{label} · {html.escape(announcement)}</h2><p>日期是 arXiv RSS 公告批次标签，不是提交日期或邮件发送日期。按本次读取的 Zotero 文献库计算加权摘要相似度，分数不是相关概率。'
+                     + ('本次为历史批次前 5 篇复盘，不是当天新论文。' if review else '') + '</p>')
     batch = os.environ.get("EMAIL_RECOVERY_BATCH", "")
     if batch:
         parts.append(f'<h2>历史批次补发 · {html.escape(batch)}</h2><p>以下来自该日真实 arXiv 公告元数据，按本次读取的 Zotero 文献库重新排序；不是今日新论文。</p>')
