@@ -328,6 +328,8 @@ def test_accepted_receipt_survives_ledger_failure_for_recovery(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="GitHub state"):
         W.execute_period(W.previous_period("year", date(2027, 1, 1)), fake_cache,
                          fake_ledger, "email", False, float("inf"))
+    proof = json.loads((tmp_path / "outputs/periodic/periodic-receipts.json").read_text())[0]
+    assert proof["smtp_accepted"] and proof["period_key"].startswith("year:")
 
 def test_idle_auto_does_not_create_or_reupload_large_cache(monkeypatch):
     monkeypatch.setattr(W, "Ledger", lambda: SimpleNamespace(load=lambda: (
@@ -336,9 +338,6 @@ def test_idle_auto_does_not_create_or_reupload_large_cache(monkeypatch):
     monkeypatch.setattr(W, "PublicCache", lambda *a: pytest.fail("idle run touched cache"))
     monkeypatch.setattr(sys, "argv", ["worker", "--channel", "email", "--dry-run"])
     W.main()
-
-    proof = json.loads((tmp_path / "outputs/periodic/periodic-receipts.json").read_text())[0]
-    assert proof["smtp_accepted"] and proof["period_key"].startswith("year:")
 
 def test_changed_profile_during_ranking_blocks_send(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
