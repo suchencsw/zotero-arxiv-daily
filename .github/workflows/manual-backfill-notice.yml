@@ -1,0 +1,36 @@
+name: Send audited missed email notification
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Audited missing empty-notification date YYYY-MM-DD"
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: zotero-arxiv-daily-email
+  cancel-in-progress: false
+jobs:
+  send-audited-notice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Send only the audited missing notification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKFILL_TARGET_DATE: ${{ inputs.target_date }}
+          SENDER: ${{ secrets.SENDER }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+        run: python scripts/manual_backfill_notice.py
+      - name: Preserve actual SMTP acknowledgement
+        if: always() && hashFiles('outputs/backfill-notice-receipt.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: email-backfill-notice-receipt
+          path: outputs/backfill-notice-receipt.json
+          retention-days: 30
+          if-no-files-found: error
