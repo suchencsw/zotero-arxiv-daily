@@ -6,7 +6,9 @@
 
 Actions 页面明确提示该 fork 因 GitHub Actions 使用规模暂停运行，需要维护者重新启用。API 同时显示仓库权限 `enabled=true`、工作流 `active`，但手动触发邮件和 CI 均返回 HTTP 422 “Actions has been disabled for this repository”。再次设置仓库权限和调用工作流 enable API 没有解除这一限制。
 
-需要维护者登录 https://github.com/suchencsw/zotero-arxiv-daily/actions ，使用页面提示的重新启用入口。代码修复及本地测试通过不代表平台已恢复；只有真实新运行及 SMTP 回执才能确认补发。此次尚未补发，不应将其记作成功。
+维护者已在 Actions 页面重新启用。2026-10-11 北京时间 15:57:36，运行 [38122987673](https://github.com/suchencsw/zotero-arxiv-daily/actions/runs/38122987673) 的 SMTP 回执确认接受了 10 月 9 日历史批次补发邮件：100 篇候选，30 篇输出，本次读取的 Zotero 去重参考库 568 篇。HTML 产物包含中文 TLDR，并明确标注历史批次。SMTP 接受不代表收件箱已收到，仍需用户检查收件箱或垃圾箱。
+
+同批次再次触发的运行 [38123171724](https://github.com/suchencsw/zotero-arxiv-daily/actions/runs/38123171724) 正确读取上述回执并跳过发送，没有重复联系 SMTP。云端 CI [38123123796](https://github.com/suchencsw/zotero-arxiv-daily/actions/runs/38123123796) 全部 120 项测试通过。
 
 守卫不再查看任务的绿色状态，而是读取 `email-smtp-receipt` 回执：它只在 SMTP 接受消息后产生。记录包含北京时间日期、论文数量、候选数量与 Zotero 参考库数量，不包含账号、密码或 API 密钥。即使后续清理步骤失败，已有发送回执仍能阻止重复发送。
 
