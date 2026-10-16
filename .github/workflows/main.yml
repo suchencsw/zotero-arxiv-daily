@@ -36,6 +36,7 @@ jobs:
       PYTHONUTF8: "1"
       EMAIL_RECOVERY_BATCH: ${{ inputs.recovery_batch || '' }}
       EMAIL_DRY_RUN: ${{ inputs.verify_only && 'true' || 'false' }}
+      ARXIV_VERIFY_ONLY: ${{ inputs.verify_only && 'true' || 'false' }}
       EMAIL_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
       EMAIL_DELIVERY_RECEIPT: outputs/smtp-receipt.json
       EMAIL_PREVIEW_PATH: outputs/email-preview.html

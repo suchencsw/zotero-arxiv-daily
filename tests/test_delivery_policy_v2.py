@@ -43,18 +43,22 @@ class MemoryLedger:
         self.files = {}
 
     def load(self):
-        return self.state, 'state_sha'
+        import copy
+        return copy.deepcopy(self.state), 'state_sha'
 
     def update(self, mutation):
         mutation(self.state)
 
     def api(self, path, payload=None, **kwargs):
+        import base64
+        import json
         filename = path.removeprefix('contents/').split('?')[0]
         if payload is not None:
-            import base64
-            import json
             self.files[filename] = json.loads(base64.b64decode(payload['content']))
             return {}
+        if filename in self.files:
+            return {'content': base64.b64encode(json.dumps(self.files[filename]).encode()).decode(),
+                    'encoding': 'base64'}
         raise Q.urllib.error.HTTPError('test', 404, 'missing', {}, None)
 
 
@@ -93,3 +97,36 @@ def test_periodic_content_also_suppresses_redundant_nightly_review():
     state = {'batches': {b['id']: b},
              'content_deliveries': ['2026-10-16T06:00:00Z']}
     assert Q.plan(state, datetime(2026, 10, 16, 22, tzinfo=Q.BJ))[0] is None
+
+
+def test_verification_replays_completed_snapshot_without_changing_delivery(monkeypatch, tmp_path):
+    import copy
+    import json
+    ledger = MemoryLedger({'batches': {}, 'completed': {}, 'sent': {}})
+    rows = [{'arxiv_id': '2610.00001', 'title': 'SLAM', 'abstract': 'Mapping',
+             'categories': ['cs.CV']}]
+    Q.save_snapshot(ledger, '2026-10-16', rows, 'email')
+    ledger.state['batches'][Q.batch_key('2026-10-16')]['completed_at'] = '2026-10-16T06:00:00Z'
+    ledger.state['sent'][Q.paper_fingerprint('2610.00001')] = '2026-10-16T06:00:00Z'
+    original = copy.deepcopy(ledger.state)
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, *args):
+            return b'<feed xmlns="http://www.w3.org/2005/Atom"><title>cs.CV updates on arXiv.org</title></feed>'
+    class FixedTime(datetime):
+        @classmethod
+        def now(cls, tz=None): return datetime(2026, 10, 16, 16, tzinfo=Q.BJ)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('ARXIV_VERIFY_ONLY', 'true')
+    monkeypatch.delenv('ARXIV_FORCE_SEND', raising=False)
+    monkeypatch.setenv('GITHUB_OUTPUT', str(tmp_path/'output'))
+    monkeypatch.setenv('GITHUB_ENV', str(tmp_path/'env'))
+    monkeypatch.setattr(Q, 'datetime', FixedTime)
+    monkeypatch.setattr(Q, 'Ledger', lambda **kwargs: ledger)
+    monkeypatch.setattr(Q, 'import_proofs', lambda *args: None)
+    monkeypatch.setattr(Q.urllib.request, 'urlopen', lambda *args, **kwargs: Response())
+    Q.prepare('email')
+    assert 'should_run=true' in (tmp_path/'output').read_text('utf8')
+    assert json.loads((tmp_path/'data/selected-announcement.json').read_text('utf8'))['candidates'] == rows
+    assert ledger.state == original

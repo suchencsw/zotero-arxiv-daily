@@ -233,7 +233,9 @@ def prepare(channel):
     state, _ = ledger.load()
     state['content_deliveries'] = [p['delivered_at'] for p in delivered.get('completed', {}).values()
                                    if p.get('paper_count', 0) > 0]
-    batch, mode, review = plan(state, datetime.now(BJ), os.environ.get('ARXIV_FORCE_SEND') == 'true')
+    replay = (os.environ.get('ARXIV_VERIFY_ONLY') == 'true'
+              or os.environ.get('ARXIV_FORCE_SEND') == 'true')
+    batch, mode, review = plan(state, datetime.now(BJ), replay)
     if batch is None:
         set_output('should_run', 'false')
         print('No pending public announcement batch; quiet retry, no empty message')
@@ -243,7 +245,7 @@ def prepare(channel):
     snapshot = json.loads(base64.b64decode(obj['content']))
     if snapshot.get('batch_id') != batch['id'] or not 1 <= len(snapshot.get('candidates', [])) <= 100:
         raise RuntimeError('Invalid persisted announcement snapshot')
-    if mode == 'papers' and os.environ.get('ARXIV_FORCE_SEND') != 'true':
+    if mode == 'papers' and not replay:
         snapshot['candidates'] = exclude_sent(snapshot['candidates'], sent)
         if not snapshot['candidates']:
             ledger.update(lambda s: s['batches'][batch['id']].update(
