@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-def write_delivery_receipt(papers, candidate_count, corpus_count):
+def write_delivery_receipt(papers, candidate_count, corpus_count, *, profile=None):
     path = os.environ.get("EMAIL_DELIVERY_RECEIPT")
     if not path:
         return
@@ -27,8 +27,15 @@ def write_delivery_receipt(papers, candidate_count, corpus_count):
         "announcement_review_key": os.environ.get("ARXIV_REVIEW_KEY"),
         "candidate_count": candidate_count,
         "paper_count": len(papers),
+        "recommended_count": sum(getattr(p,'recommendation_status','recommended')!='diagnostic' for p in papers),
+        "diagnostic_count": sum(getattr(p,'recommendation_status','')=='diagnostic' for p in papers),
+        "zotero_reference_digest": (profile or {}).get('reference_digest'),
+        "zotero_last_synced_at": (profile or {}).get('last_synced_at'),
+        "weighting": os.environ.get('EMAIL_RECENT_WEIGHTING','rank_log'),
         "zotero_corpus_count": corpus_count,
-        "papers": [{"title": p.title, "url": p.url, "score": p.score} for p in papers],
+        "papers": [{"title": p.title, "url": p.url, "score": float(p.score),
+                    "recommendation_status": getattr(p,'recommendation_status','recommended'),
+                    "similarity_rank":getattr(p,'similarity_rank',None)} for p in papers],
     }
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)

@@ -94,6 +94,7 @@ class Executor:
             if str((item.get('data') or {}).get('title') or '').strip()
             and str((item.get('data') or {}).get('abstractNote') or '').strip()
         ]
+        eligible_corpus.sort(key=lambda item: (item['data']['dateAdded'], item.get('key','')), reverse=True)
         corpus = deduplicate_zotero_items(eligible_corpus)
         logger.info(
             "Fetched {} Zotero records: {} eligible, {} unique papers "
@@ -113,6 +114,7 @@ class Executor:
             paths = [get_collection_path(col) for col in c['data']['collections']]
             c['paths'] = paths
         return [CorpusPaper(
+            key=c.get('key',''),
             title=c['data']['title'],
             abstract=c['data']['abstractNote'],
             added_date=datetime.strptime(c['data']['dateAdded'], '%Y-%m-%dT%H:%M:%SZ'),
@@ -167,10 +169,19 @@ class Executor:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
             limit = 5 if os.environ.get("ARXIV_BATCH_MODE") == "review" else self.config.executor.max_paper_num
-            reranked_papers = reranked_papers[:limit]
+            if os.environ.get("EMAIL_RELEVANCE_GATE") == "true":
+                from .personalization import screen_ranked
+                reranked_papers = screen_ranked(reranked_papers, self.reranker.profile_state,
+                                               self.openai_client, limit=min(30, int(limit)))
+            else:
+                reranked_papers = reranked_papers[:limit]
             logger.info("Generating TLDR and affiliations...")
             for p in tqdm(reranked_papers):
                 p.generate_tldr(self.openai_client, self.config.llm)
+                if os.environ.get("EMAIL_RELEVANCE_GATE") == "true" and not re.search(r'[\u4e00-\u9fff]',p.tldr or ''):
+                    p.generate_tldr(self.openai_client, self.config.llm)
+                    if not re.search(r'[\u4e00-\u9fff]',p.tldr or ''):
+                        raise RuntimeError('Chinese TLDR required after retry; refusing English abstract fallback')
                 p.generate_affiliations(self.openai_client, self.config.llm)
         elif os.environ.get("ARXIV_BATCH_TRACKING") == "true":
             logger.info("No public announcement candidates; quiet retry, no empty email")
@@ -187,10 +198,13 @@ class Executor:
         if preview:
             target = Path(preview)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(email_content, encoding="utf-8")
+            public_preview=re.sub(r'<aside class="profile-evidence">.*?</aside>',
+                '<p>具体 Zotero 关联依据仅随邮件发送，不写入公开诊断附件。</p>',email_content,flags=re.S)
+            target.write_text(public_preview, encoding="utf-8")
         if os.environ.get("EMAIL_DRY_RUN") == "true":
             logger.info("Verification only: no SMTP request and no successful delivery receipt")
             return
         send_email(self.config, email_content)
-        write_delivery_receipt(reranked_papers, len(all_papers), len(corpus))
+        write_delivery_receipt(reranked_papers, len(all_papers), len(corpus),
+                               profile=getattr(self.reranker,'profile_state',{}))
         logger.info("Email sent successfully")

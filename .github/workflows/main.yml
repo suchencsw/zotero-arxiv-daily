@@ -40,8 +40,10 @@ jobs:
       EMAIL_DELIVERY_RECEIPT: outputs/smtp-receipt.json
       EMAIL_PREVIEW_PATH: outputs/email-preview.html
       ARXIV_BATCH_TRACKING: "true"
-      # Preserve the currently configured email RSS scopes and their query order.
-      ARXIV_BATCH_CATEGORIES: "cs.AI,cs.LG,cs.CV,cs.RO,cs.GR"
+      ARXIV_BATCH_CATEGORIES: "cs.CV,cs.RO,cs.GR,cs.AI,cs.LG,astro-ph.EP,astro-ph.IM,eess.IV"
+      EMAIL_RECENT_WEIGHTING: "recent_mixture"
+      EMAIL_RELEVANCE_GATE: "true"
+      PAPERFLOW_RESEARCH_SCOPE: "视觉导航、几何计算机视觉、行星探测、具身智能、SLAM、三维重建"
       ARXIV_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
     steps:
       - name: Checkout
@@ -72,6 +74,7 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_API_BASE }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
           EMAIL_EMPTY_ALREADY_SENT: ${{ steps.delivery_guard.outputs.empty_already_sent }}
         run: |

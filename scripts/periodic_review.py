@@ -1,7 +1,7 @@
 """Periodic recall: full UTC-query/Beijing-calendar windows, fresh Zotero, resumable cache.
 
-This file is identical in the email and Feishu repositories. Daily ranking is
-unchanged. Periodic ranking uses the same explicit recent-mixture strategy on both.
+This file is identical in the email and Feishu repositories. Periodic ranking
+uses the same explicit recent-mixture strategy as both optimized daily rankers.
 Only public arXiv metadata/vectors are cached; no Zotero records or credentials.
 """
 from __future__ import annotations
@@ -461,7 +461,7 @@ def fresh_zotero():
         seen.add(key)
         refs.append({"key": item["key"], "title": title, "abstract": abstract,
                      "date_added": d["dateAdded"], "arxiv_id": identifier})
-    refs.sort(key=lambda r: r["date_added"], reverse=True)
+    refs.sort(key=lambda r: (r["date_added"],r["key"]), reverse=True)
     if not refs:
         raise RuntimeError("No eligible Zotero references")
     return refs, version, saved_ids, saved_titles

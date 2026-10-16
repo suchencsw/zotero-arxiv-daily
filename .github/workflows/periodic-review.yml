@@ -23,7 +23,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: email-periodic-review
+  group: zotero-arxiv-daily-email
   cancel-in-progress: false
 
 jobs:

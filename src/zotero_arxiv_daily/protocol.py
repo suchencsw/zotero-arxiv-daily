@@ -6,6 +6,7 @@ import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
+import os
 RawPaperItem = TypeVar('RawPaperItem')
 
 
@@ -14,6 +15,8 @@ def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) 
     generation_kwargs = dict(llm_params.get("generation_kwargs", {}))
 
     if api_mode == "chat_completion":
+        if os.environ.get('EMAIL_RELEVANCE_GATE')=='true' and 'siliconflow.cn' in os.environ.get('OPENAI_BASE_URL',''):
+            generation_kwargs.setdefault('extra_body', {'enable_thinking':False})
         response = openai_client.chat.completions.create(
             messages=messages,
             **generation_kwargs,
@@ -137,3 +140,4 @@ class CorpusPaper:
     abstract: str
     added_date: datetime
     paths: list[str]
+    key: str = ""

@@ -45,12 +45,15 @@ def build_relevance_batches(papers: list[dict], state: dict, batch_size: int = 1
             "title": item["title"],
             "saved_at": item.get("date_added"),
             "weight": round(item["weight"], 6),
+            "abstract": str(item.get("abstract", ""))[:700],
         }
         for item in anchors[:40]
     ]
     entries = []
     for p in papers:
-        nearest = p.get("zotero_recent_matches") or p.get("zotero_matches") or []
+        nearest=[]
+        for m in (p.get('zotero_recent_matches') or [])[:2]+(p.get('zotero_matches') or [])[:3]:
+            if m.get('key') not in {r.get('key') for r in nearest}: nearest.append(m)
         refs = [
             {
                 "key": m["key"],
@@ -58,7 +61,7 @@ def build_relevance_batches(papers: list[dict], state: dict, batch_size: int = 1
                 "saved_at": m.get("date_added"),
                 "abstract": str(corpus.get(m["key"], {}).get("abstract", ""))[:1800],
             }
-            for m in nearest[:3]
+            for m in nearest[:5]
         ]
         entries.append(
             {
@@ -86,7 +89,10 @@ SYSTEM_PROMPT = """你是严格的科研文献相关性审查员。依据用户�
 相似的图、图像、深度学习、优化、鲁棒性、生成、推理等词汇本身不是相关证据。例如，若用户主要关注视觉定位/SfM/回环检测/三维建图，不能仅凭泛词推荐普通图像生成、通信或泛智能体推理论文。实际方向始终由最近保存文献决定，不固定为此示例。
 不要把“都使用神经网络/图/优化”当作 method；必须有具体的算法环节与目标任务连接。少数跨领域保存文献可以表示方法兴趣，不自动代表用户已转向该应用领域。
 不得因候选数多而凑数；不确定归为 weak。每条 direct 或 method 必须引用提供的 references 或 saved_research_context 中的至少一个真实 key，reason 用中文简要说明任务或方法连接。
-只返回 JSON 对象：{"decisions":[{"id":"原样候选id","relation":"direct|method|weak|unrelated","reference_keys":["key"],"reason":"中文依据"}]}。逐条返回所有候选，不要遗漏、重复或添加。"""
+必须同时尊重多个独立方向：视觉导航/定位、几何计算机视觉、行星探测、具身智能、SLAM、三维重建。不要把一切都缩成定位或导航；例如单全景图三维重建（GeoPano）、新视角合成和几何一致性本身即可直接对应三维重建，不要求必须演示导航。
+拒绝牵强迁移：单位四元数的通用存储压缩、KV缓存量化、通信优化、葡萄虫害识别、微型游动机器人等，不能仅凭“都涉及姿态/优化/视觉/控制”认定相关。method必须存在摘要能支持的具体算法模块、真实目标任务和应用假设相容性；“以后也许可用于SLAM”不是证据。不同物理尺度或传感假设不相容时应为weak。
+method额外返回 transfer={"source_mechanism":"具体算法机制","target_component":"用户研究中的具体处理模块","evidence_quote":"从候选英文摘要连续原样复制8至180字符的机制证据，不翻译、不加省略号"}。不能提供可核对证据就归为weak。direct无需transfer。
+只返回 JSON 对象：{"decisions":[{"id":"原样候选id","relation":"direct|method|weak|unrelated","reference_keys":["key"],"reason":"中文依据","transfer":{}}]}。逐条返回所有候选，不要遗漏、重复或添加。"""
 
 
 def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
@@ -113,6 +119,13 @@ def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
                 raise RuntimeError("Relevance gate cited an unprovided Zotero reference")
             if not re.search(r"[\u4e00-\u9fff]", str(d.get("reason", ""))):
                 raise RuntimeError("Relevance gate must provide a Chinese grounded reason")
+            if d['relation']=='method':
+                t=d.get('transfer') or {}
+                quote=re.sub(r'\s+',' ',str(t.get('evidence_quote',''))).strip()
+                abstract=re.sub(r'\s+',' ',candidates[d['id']].get('abstract',''))
+                if (not t.get('source_mechanism') or not t.get('target_component')
+                        or not 8<=len(quote)<=180 or quote.casefold() not in abstract.casefold()):
+                    d.update(relation='weak',reason='缺少可核对的具体迁移机制证据；'+str(d.get('reason','')))
     return decisions
 
 

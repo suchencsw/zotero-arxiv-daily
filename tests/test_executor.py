@@ -175,8 +175,9 @@ def test_fetch_zotero_corpus(config, monkeypatch):
     corpus = executor.fetch_zotero_corpus()
 
     assert len(corpus) == 2
-    assert corpus[0].title == "Stub Paper 1"
-    assert "survey/topic-a" in corpus[0].paths[0]
+    assert corpus[0].added_date >= corpus[1].added_date
+    paper1=next(p for p in corpus if p.title=='Stub Paper 1')
+    assert "survey/topic-a" in paper1.paths[0]
 
 
 def test_fetch_zotero_corpus_paper_with_zero_collections(config, monkeypatch):

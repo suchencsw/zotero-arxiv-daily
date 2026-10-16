@@ -115,6 +115,8 @@ def render_email(papers:list[Paper]) -> str:
         label = "历史批次复盘" if review else "公开公告批次推荐"
         parts.append(f'<h2>{label} · {html.escape(announcement)}</h2><p>日期是 arXiv RSS 公告批次标签，不是提交日期或邮件发送日期。按本次读取的 Zotero 文献库计算加权摘要相似度，分数不是相关概率。'
                      + ('本次为历史批次前 5 篇复盘，不是当天新论文。' if review else '') + '</p>')
+        if review and os.environ.get('ARXIV_REVIEW_FOR_DATE'):
+            parts.append('<p>复盘服务日期：'+html.escape(os.environ['ARXIV_REVIEW_FOR_DATE'])+'；任务延迟跨日时仍按该服务日期补偿，不冒充新公告。</p>')
     batch = os.environ.get("EMAIL_RECOVERY_BATCH", "")
     if batch:
         parts.append(f'<h2>历史批次补发 · {html.escape(batch)}</h2><p>以下来自该日真实 arXiv 公告元数据，按本次读取的 Zotero 文献库重新排序；不是今日新论文。</p>')
@@ -137,7 +139,16 @@ def render_email(papers:list[Paper]) -> str:
                 affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
-        parts.append(get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations))
+        parts.append(get_block_html(html.escape(p.title), html.escape(authors), rate, html.escape(p.tldr or ''), html.escape(p.pdf_url or '',quote=True), html.escape(affiliations)))
+        decision=getattr(p,'relevance_decision',None)
+        if decision:
+            diagnostic=getattr(p,'recommendation_status','')=='diagnostic'
+            status='待核验候选（不是正式推荐，仅用于检查相似度）' if diagnostic else '正式推荐（任务/方法关联已审查）'
+            parts.append(f'<p><strong>{status}</strong> · 相似度排名 {p.similarity_rank}；{float(p.score):.4f}/10，不是相关概率。</p>')
+            evidence='；'.join(getattr(p,'reference_titles',[]))
+            parts.append('<aside class="profile-evidence"><p><strong>与你的文献关联：</strong>'+html.escape(decision.get('reason',''))
+                         +'<br>依据：'+html.escape(evidence)+'</p></aside>')
+            parts.append('<p><a href="'+html.escape(p.url,quote=True)+'">论文页</a></p>')
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
     return framework.replace('__CONTENT__', content)

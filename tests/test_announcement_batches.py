@@ -103,7 +103,7 @@ def test_email_candidate_order_is_unchanged():
 
 
 def test_force_resend_requires_explicit_opt_in():
-    b = batch('2026-10-12','confirmed')
+    b = batch('2026-10-12','2026-10-12T10:00:00+08:00')
     s = {'batches':{b['id']:b}}
     now = datetime(2026,10,13,0,41,tzinfo=Q.BJ)
     assert Q.plan(s,now)[0] is None
