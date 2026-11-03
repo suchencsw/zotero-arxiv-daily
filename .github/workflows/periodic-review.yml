@@ -38,7 +38,7 @@ jobs:
       ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: https://api.siliconflow.cn/v1
-      PAPERFLOW_LLM_MODEL: deepseek-ai/DeepSeek-V4-Flash
+      PAPERFLOW_LLM_MODEL: deepseek-ai/DeepSeek-V3.2
       PAPERFLOW_RESEARCH_SCOPE: '视觉导航、计算机视觉、行星探测、具身智能、SLAM、三维重建'
       PERIODIC_EXCLUDE_IDS: ${{ vars.PERIODIC_EXCLUDE_IDS }}
       SENDER: ${{ secrets.SENDER }}

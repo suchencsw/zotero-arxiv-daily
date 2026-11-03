@@ -44,6 +44,7 @@ jobs:
       ARXIV_BATCH_CATEGORIES: "cs.CV,cs.RO,cs.GR,cs.AI,cs.LG,astro-ph.EP,astro-ph.IM,eess.IV"
       EMAIL_RECENT_WEIGHTING: "recent_mixture"
       EMAIL_RELEVANCE_GATE: "true"
+      PAPERFLOW_LLM_MODEL: "deepseek-ai/DeepSeek-V3.2"
       PAPERFLOW_RESEARCH_SCOPE: "视觉导航、几何计算机视觉、行星探测、具身智能、SLAM、三维重建"
       ARXIV_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
     steps:

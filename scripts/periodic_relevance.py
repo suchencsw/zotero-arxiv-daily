@@ -164,7 +164,7 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
             max_retries=2,
         )
     batches = build_relevance_batches(papers, state)
-    model = os.environ.get("PAPERFLOW_LLM_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
+    model = os.environ.get("PAPERFLOW_LLM_MODEL", "deepseek-ai/DeepSeek-V3.2")
 
     def run(batch):
         wire, ids, refs = _wire_batch(batch)

@@ -16,7 +16,7 @@ llm:
     base_url: ${oc.env:OPENAI_API_BASE}
   api_mode: chat_completion
   generation_kwargs:
-    model: deepseek-ai/DeepSeek-V4-Flash
+    model: deepseek-ai/DeepSeek-V3.2
     max_tokens: 512
   language: Chinese
 
