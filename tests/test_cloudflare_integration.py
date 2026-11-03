@@ -8,6 +8,19 @@ def gate_module():
     except ModuleNotFoundError:
         return importlib.import_module('zotero_arxiv_daily.grounded_relevance')
 
+def test_invalid_citation_rejects_only_its_paper_not_valid_batch_peers():
+    module=gate_module()
+    batch={'saved_research_context':[{'key':'K'}], 'candidates':[
+        {'id':p,'abstract':'Visual SLAM','references':[{'key':'K'}]} for p in ('P1','P2','P3')]}
+    payload={'decisions':[
+        {'id':'P1','relation':'direct','reference_keys':['invented'],'reason':'相关'},
+        {'id':'P2','relation':'method','reference_keys':[],'reason':'相关'},
+        {'id':'P3','relation':'direct','reference_keys':['K'],'reason':'直接研究视觉定位'}]}
+    result=module.parse_relevance_decisions(json.dumps(payload),batch)
+    assert [d['relation'] for d in result]==['weak','weak','direct']
+    assert result[0]['reference_keys']==[] and result[0]['validation_error']=='unprovided_reference'
+    assert result[1]['reference_keys']==[] and result[2]['reference_keys']==['K']
+
 def test_cloudflare_gate_disables_hidden_reasoning(monkeypatch):
     module=gate_module()
     monkeypatch.setenv('OPENAI_BASE_URL','https://api.cloudflare.com/client/v4/accounts/test/ai/v1')

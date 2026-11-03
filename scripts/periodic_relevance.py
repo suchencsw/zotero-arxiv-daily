@@ -116,7 +116,12 @@ def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
             }
             cited = d.get("reference_keys")
             if not isinstance(cited, list) or not cited or not set(cited).issubset(supplied):
-                raise RuntimeError("Relevance gate cited an unprovided Zotero reference")
+                # Reject this ungrounded association without discarding valid
+                # peers. Never keep the fabricated citation or its rationale.
+                d.update(relation='weak', reference_keys=[], transfer={},
+                         validation_error='unprovided_reference',
+                         reason='关联未验证：模型未引用本篇可用的真实 Zotero 依据，不作为正式推荐。')
+                continue
             if not re.search(r"[\u4e00-\u9fff]", str(d.get("reason", ""))):
                 raise RuntimeError("Relevance gate must provide a Chinese grounded reason")
             if d['relation']=='method':
@@ -214,8 +219,9 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
                         str(d.get("reason", "")),
                     )
                 kept = sum(d["relation"] in {"direct", "method"} for d in decisions)
+                invalid = sum(bool(d.get('validation_error')) for d in decisions)
                 print(
-                    f"Grounded relevance batch checked: {len(decisions)} candidates, {kept} task/method matches",
+                    f"Grounded relevance batch checked: {len(decisions)} candidates, {kept} task/method matches, {invalid} unverified citations rejected",
                     flush=True,
                 )
                 return decisions
