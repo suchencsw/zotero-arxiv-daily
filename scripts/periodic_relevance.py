@@ -47,7 +47,7 @@ def build_relevance_batches(papers: list[dict], state: dict, batch_size: int = 1
             "weight": round(item["weight"], 6),
             "abstract": str(item.get("abstract", ""))[:700],
         }
-        for item in anchors[:40]
+        for item in anchors[:max(1,min(40,int(os.environ.get('PAPERFLOW_REFERENCE_CONTEXT_LIMIT','40'))))]
     ]
     entries = []
     for p in papers:
@@ -90,7 +90,7 @@ SYSTEM_PROMPT = """你是严格的科研文献相关性审查员。依据用户�
 不要把“都使用神经网络/图/优化”当作 method；必须有具体的算法环节与目标任务连接。少数跨领域保存文献可以表示方法兴趣，不自动代表用户已转向该应用领域。
 不得因候选数多而凑数；不确定归为 weak。每条 direct 或 method 必须引用提供的 references 或 saved_research_context 中的至少一个真实 key，reason 用中文简要说明任务或方法连接。
 必须同时尊重多个独立方向：视觉导航/定位、几何计算机视觉、行星探测、具身智能、SLAM、三维重建。不要把一切都缩成定位或导航；例如单全景图三维重建（GeoPano）、新视角合成和几何一致性本身即可直接对应三维重建，不要求必须演示导航。
-拒绝牵强迁移：单位四元数的通用存储压缩、KV缓存量化、通信优化、葡萄虫害识别、微型游动机器人等，不能仅凭“都涉及姿态/优化/视觉/控制”认定相关。method必须存在摘要能支持的具体算法模块、真实目标任务和应用假设相容性；“以后也许可用于SLAM”不是证据。不同物理尺度或传感假设不相容时应为weak。
+拒绝牵强迁移：不能仅凭“都涉及姿态/优化/视觉/控制”认定相关。method必须存在摘要能支持的具体算法模块、真实目标任务和应用假设相容性；“以后也许可用于SLAM”不是证据。不要按论文名称、应用行业或模型名称硬编码黑名单；若摘要明确给出对视觉几何、三维表示或真实参考任务的具体可迁移模块，应据实判断。不同物理尺度或传感假设不相容时应为weak。
 method额外返回 transfer={"source_mechanism":"具体算法机制","target_component":"用户研究中的具体处理模块","evidence_quote":"从候选英文摘要连续原样复制8至180字符的机制证据，不翻译、不加省略号"}。不能提供可核对证据就归为weak。direct无需transfer。
 只返回 JSON 对象：{"decisions":[{"id":"原样候选id","relation":"direct|method|weak|unrelated","reference_keys":["key"],"reason":"中文依据","transfer":{}}]}。逐条返回所有候选，不要遗漏、重复或添加。"""
 
@@ -213,7 +213,8 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
     model = os.environ.get("PAPERFLOW_LLM_MODEL", "deepseek-ai/DeepSeek-V3.2")
 
     def run(batch, model_override=None):
-        wire, ids, refs = _wire_batch(batch, compact_references=bool(model_override))
+        compact=bool(model_override) or os.environ.get('PAPERFLOW_COMPACT_REFERENCES')=='true'
+        wire, ids, refs = _wire_batch(batch, compact_references=compact)
         titles = {r["key"]: r["title"] for r in wire.get("saved_research_context", [])}
         titles.update({r['key']:r['title'] for r in wire.get('reference_catalog', [])})
         titles.update({r["key"]: r["title"] for p in wire["candidates"] for r in p["references"] if 'title' in r})
@@ -225,7 +226,7 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
                     temperature=0,
                     max_tokens=4096,
                     response_format={"type": "json_object"},
-                    extra_body={"enable_thinking": False}
+                    extra_body={"enable_thinking": False, **({'thinking_budget':1024} if 'GLM-5.3-Flash' in (model_override or model) else {})}
                     if "siliconflow.cn" in os.environ.get("OPENAI_BASE_URL", "")
                     else {"chat_template_kwargs": {"enable_thinking": False}}
                     if "api.cloudflare.com/" in os.environ.get("OPENAI_BASE_URL", "") and not model_override
@@ -234,7 +235,7 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT +
                          ('\n参考文献摘要按 key 集中存放在 reference_catalog，references 和 saved_research_context 中同名 key 指向该原文；请据此核对，不要求重复出现摘要。'
-                          if model_override else '')},
+                          if compact else '')},
                         {"role": "user", "content": json.dumps(wire, ensure_ascii=False)},
                     ],
                 )

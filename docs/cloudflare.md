@@ -1,3 +1,5 @@
+> 历史配置说明：当前生产推送已改为 GLM-5.3-Flash 的统一日推。请先阅读 [统一推送说明](unified-daily.md)。本文中的 Cloudflare 与独立日推配置不再是当前生产路径。
+
 # Cloudflare Workers AI configuration
 
 Both daily mail and periodic recall use these Actions Secrets:

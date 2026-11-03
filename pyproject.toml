@@ -20,6 +20,7 @@ dependencies = [
     "sentence-transformers>=5.2.3",
     "torch",
     "openai>=2.24.0",
+    "cryptography>=44.0",
     "arxiv>=2.4.0",
     "pymupdf4llm>=0.3.4",
     "pymupdf-layout>=1.27.1",

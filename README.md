@@ -1,4 +1,9 @@
 <p align="center">
+
+> 2026-11-03 更新：邮件与飞书已改为同一条云端推荐流程，统一使用 GLM-5.3-Flash。
+> 每天最多一份新结果、最多100篇候选和30篇输出；其余触发仅重试未完成发送。
+> 周/月/年补选及独立的飞书定时计算已停用。部署与缓存说明见 [统一推送说明](docs/unified-daily.md)。
+
   <a href="" rel="noopener">
  <img width=200px height=200px src="assets/logo.svg" alt="logo"></a>
 </p>

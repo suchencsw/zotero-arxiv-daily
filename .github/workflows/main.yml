@@ -1,140 +1,87 @@
-name: Send emails daily
+name: Unified daily papers - email and Feishu
 on:
   workflow_dispatch:
     inputs:
-      recovery_batch:
-        description: "Optional saved announcement batch YYYY-MM-DD, explicitly marked historical"
-        required: false
-        default: ""
       verify_only:
-        description: "Fetch and rank with current Zotero, without sending email"
+        description: 'Rank with fresh Zotero and record usage, without sending either channel'
         type: boolean
         default: false
-      force_send:
-        description: "Explicitly resend even if SMTP delivery was already acknowledged"
-        type: boolean
-        default: false
+      max_batches:
+        description: 'Latest announcement plus optional queued recovery, maximum 3'
+        default: '1'
   schedule:
-    # Re-register the schedule; four cloud attempts, no local watchdog.
-    # GitHub scheduling remains best-effort, not a guaranteed timer.
+    # Retries of pending channel deliveries, not four independent recommendations.
     - cron: '23 1,5,9,13 * * *'
-
 permissions:
   contents: write
   actions: read
-
 concurrency:
-  group: zotero-arxiv-daily-email
+  group: unified-zotero-recommendations
   cancel-in-progress: false
-
 jobs:
-  calculate-and-send:
+  recommend-and-deliver:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 85
     env:
       TZ: Asia/Shanghai
-      PYTHONUTF8: "1"
-      EMAIL_RECOVERY_BATCH: ${{ inputs.recovery_batch || '' }}
-      EMAIL_DRY_RUN: ${{ inputs.verify_only && 'true' || 'false' }}
-      ARXIV_VERIFY_ONLY: ${{ inputs.verify_only && 'true' || 'false' }}
-      EMAIL_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
-      EMAIL_DELIVERY_RECEIPT: outputs/smtp-receipt.json
-      EMAIL_PREVIEW_PATH: outputs/email-preview.html
-      ARXIV_BATCH_TRACKING: "true"
-      ARXIV_BATCH_CATEGORIES: "cs.CV,cs.RO,cs.GR,cs.AI,cs.LG,astro-ph.EP,astro-ph.IM,eess.IV"
-      EMAIL_RECENT_WEIGHTING: "recent_mixture"
-      EMAIL_RELEVANCE_GATE: "true"
-      PAPERFLOW_LLM_MODEL: "@cf/zai-org/glm-4.7-flash"
-      PAPERFLOW_RELEVANCE_REVIEW_MODEL: "@cf/openai/gpt-oss-120b"
-      PAPERFLOW_RESEARCH_SCOPE: "视觉导航、几何计算机视觉、行星探测、具身智能、SLAM、三维重建"
-      ARXIV_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+      ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+      ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
+      OPENAI_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+      OPENAI_BASE_URL: https://api.siliconflow.cn/v1
+      PAPERFLOW_LLM_MODEL: zai-org/GLM-5.3-Flash
+      PAPERFLOW_EMBED_MODEL: BAAI/bge-m3
+      PAPERFLOW_RELEVANCE_REVIEW_MODEL: ''
+      PAPERFLOW_COMPACT_REFERENCES: 'true'
+      PAPERFLOW_REFERENCE_CONTEXT_LIMIT: '20'
+      PAPERFLOW_RESEARCH_SCOPE: '视觉导航、几何计算机视觉、行星探测、具身智能、SLAM、三维重建；根据近期实际Zotero收藏动态更新'
+      ARXIV_BATCH_CATEGORIES: 'cs.CV,cs.RO,cs.GR,cs.AI,cs.LG,astro-ph.EP,astro-ph.IM,eess.IV'
+      UNIFIED_STATE_KEY: ${{ secrets.UNIFIED_STATE_KEY }}
+      SENDER: ${{ secrets.SENDER }}
+      RECEIVER: ${{ secrets.RECEIVER }}
+      SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+      VERIFY_ONLY: ${{ inputs.verify_only && 'true' || 'false' }}
+      MAX_BATCHES: ${{ inputs.max_batches || '1' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Queue public announcement batches and retry unfinished delivery
-        id: delivery_guard
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install lightweight cloud dependencies
+        run: python -m pip install numpy requests openai cryptography
+      - name: Restore public vectors and encrypted model checkpoints
+        uses: actions/cache/restore@v4
+        with:
+          path: outputs/unified-cache
+          key: unified-bge-m3-v1-${{ github.run_id }}
+          restore-keys: unified-bge-m3-v1-
+      - name: Compute once and deliver the identical result to both channels
         run: |
-          if [ -n "$EMAIL_RECOVERY_BATCH" ]; then
-            python scripts/email_delivery_guard.py
-          else
-            python scripts/announcement_batches.py --channel email
-          fi
-
-      - name: Setup uv
-        if: steps.delivery_guard.outputs.should_run == 'true'
-        uses: astral-sh/setup-uv@v7
-
-      - name: Fetch current Zotero, rank papers and send email
-        if: steps.delivery_guard.outputs.should_run == 'true'
-        env:
-          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
-          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
-          SENDER: ${{ secrets.SENDER }}
-          RECEIVER: ${{ secrets.RECEIVER }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-          OPENAI_API_KEY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          OPENAI_API_BASE: "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/ai/v1"
-          OPENAI_BASE_URL: "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/ai/v1"
-          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
-          EMAIL_EMPTY_ALREADY_SENT: ${{ steps.delivery_guard.outputs.empty_already_sent }}
-        run: |
-          test -n "$ZOTERO_ID"
-          test -n "$ZOTERO_KEY"
-          test -n "$SENDER"
-          test -n "$RECEIVER"
-          test -n "$SENDER_PASSWORD"
-          test -n "$OPENAI_API_KEY"
-          test -n "$OPENAI_API_BASE"
-          test -n "$CUSTOM_CONFIG"
-          printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
-          # Never print resolved configuration or credentials into logs.
-          uv run src/zotero_arxiv_daily/main.py executor.send_empty=false
-
-      - name: Preserve the SMTP acknowledgement
-        if: always() && hashFiles('outputs/smtp-receipt.json') != ''
+          args=(--kind daily --max-batches "$MAX_BATCHES")
+          if [ "$VERIFY_ONLY" = true ]; then args+=(--dry-run); fi
+          python scripts/unified_push.py "${args[@]}"
+      - name: Preserve model checkpoints after success or API failure
+        if: always() && hashFiles('outputs/unified-cache/public.sqlite') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: outputs/unified-cache
+          key: unified-bge-m3-v1-${{ github.run_id }}
+      - name: Preserve independent actual channel acknowledgements
+        if: always() && hashFiles('outputs/unified-receipts.json') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: email-smtp-receipt
-          path: outputs/smtp-receipt.json
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: Record confirmed announcement batch delivery
-        if: always() && hashFiles('outputs/smtp-receipt.json') != '' && env.ARXIV_BATCH_ID != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/announcement_batches.py --channel email --record outputs/smtp-receipt.json
-
-      - name: Record recommended IDs for future period recall
-        if: always() && hashFiles('outputs/smtp-receipt.json') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python scripts/periodic_review.py --channel email --record-daily outputs/smtp-receipt.json
-
-      - name: Preserve rendered email for diagnosis
-        if: always() && hashFiles('outputs/email-preview.html') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: email-preview
-          path: outputs/email-preview.html
-          retention-days: 7
-
-      - name: Summarize actual delivery state
+          name: unified-channel-receipts
+          path: outputs/unified-receipts.json
+          retention-days: 90
+      - name: Preserve ranking and token audit without private Zotero text
         if: always()
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          receipt = Path("outputs/smtp-receipt.json")
-          if receipt.exists():
-              data = json.loads(receipt.read_text())
-              text = f"SMTP accepted: {data['kind']}, {data['paper_count']} papers, Beijing date {data['beijing_date']}. Server acceptance does not prove inbox arrival."
-          else:
-              text = "No new SMTP acknowledgement: skipped, dry-run, or failed. A green workflow is not proof of a new email."
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(text + '\n')
-          print(text)
-          PY
+        uses: actions/upload-artifact@v4
+        with:
+          name: unified-recommendation-audit
+          path: outputs/unified/*-audit.json
+          retention-days: 30
+          if-no-files-found: ignore

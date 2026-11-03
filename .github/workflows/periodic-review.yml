@@ -1,96 +1,10 @@
-name: Email Periodic Paper Review
+name: Periodic recall disabled
 on:
-  schedule:
-    # Four staggered attempts; worker resumes unfinished periods.
-    - cron: '47 3,7,11,15 * * *'
   workflow_dispatch:
-    inputs:
-      kind:
-        type: choice
-        description: 'auto = due windows; explicit kind = manual previous period'
-        options: [auto, week, month, year]
-        default: auto
-      end:
-        description: 'Optional EXCLUSIVE Beijing boundary YYYY-MM-DD'
-        default: ''
-      verify_only:
-        type: boolean
-        description: 'Full scan and fresh-profile ranking; do not send'
-        default: false
-
 permissions:
-  contents: write  # hash-only delivery ledger on recommendation-state branch
-  actions: read
-
-concurrency:
-  group: zotero-arxiv-daily-email
-  cancel-in-progress: false
-
+  contents: read
 jobs:
-  review:
+  disabled:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      PYTHONUTF8: '1'
-      TZ: Asia/Shanghai
-      GH_TOKEN: ${{ github.token }}
-      ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
-      ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
-      OPENAI_API_KEY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      OPENAI_BASE_URL: "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/ai/v1"
-      PAPERFLOW_LLM_MODEL: "@cf/zai-org/glm-4.7-flash"
-      PAPERFLOW_RELEVANCE_REVIEW_MODEL: "@cf/openai/gpt-oss-120b"
-      PAPERFLOW_EMBED_MODEL: "@cf/baai/bge-m3"
-      PERIODIC_WAIT_FOR_DAILY: "true"
-      PAPERFLOW_RESEARCH_SCOPE: '视觉导航、计算机视觉、行星探测、具身智能、SLAM、三维重建'
-      PERIODIC_EXCLUDE_IDS: ${{ vars.PERIODIC_EXCLUDE_IDS }}
-      SENDER: ${{ secrets.SENDER }}
-      RECEIVER: ${{ secrets.RECEIVER }}
-      SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install lightweight periodic worker
-        run: python -m pip install numpy requests openai
-      - name: Restore public metadata and embedding checkpoints
-        uses: actions/cache/restore@v4
-        with:
-          path: outputs/periodic-cache
-          key: periodic-public-v1-${{ github.run_id }}
-          restore-keys: periodic-public-v1-
-      - name: Recall complete periods with current Zotero and deliver
-        id: worker
-        env:
-          REVIEW_KIND: ${{ inputs.kind || 'auto' }}
-          REVIEW_END: ${{ inputs.end || '' }}
-          REVIEW_VERIFY: ${{ inputs.verify_only && 'true' || 'false' }}
-        shell: bash
-        run: |
-          args=(--channel email --kind "$REVIEW_KIND")
-          if [ -n "$REVIEW_END" ]; then args+=(--end "$REVIEW_END"); fi
-          if [ "$REVIEW_VERIFY" = true ]; then args+=(--dry-run); fi
-          python scripts/periodic_review.py "${args[@]}"
-      - name: Preserve checkpoints even if an external API fails
-        if: always() && steps.worker.outputs.cache_dirty == 'true' && hashFiles('outputs/periodic-cache/public.sqlite') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: outputs/periodic-cache
-          key: periodic-public-v1-${{ github.run_id }}
-      - name: Preserve actual periodic delivery acknowledgements
-        if: always() && hashFiles('outputs/periodic/periodic-receipts.json') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: periodic-delivery
-          path: outputs/periodic/periodic-receipts.json
-          retention-days: 90
-      - name: Preserve verifiable period reports and previews
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: periodic-review-report
-          path: outputs/periodic
-          if-no-files-found: ignore
-          retention-days: 7
-
+      - run: echo 'Weekly, monthly and yearly recall are disabled by user preference.'

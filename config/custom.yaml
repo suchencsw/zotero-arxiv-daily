@@ -16,8 +16,11 @@ llm:
     base_url: ${oc.env:OPENAI_API_BASE}
   api_mode: chat_completion
   generation_kwargs:
-    model: "@cf/zai-org/glm-4.7-flash"
-    max_tokens: 512
+    model: "zai-org/GLM-5.3-Flash"
+    max_tokens: 1024
+    extra_body:
+      enable_thinking: false
+      thinking_budget: 512
   language: Chinese
 
 source:
@@ -29,7 +32,7 @@ reranker:
   api:
     key: ${oc.env:OPENAI_API_KEY}
     base_url: ${oc.env:OPENAI_API_BASE}
-    model: "@cf/baai/bge-m3"
+    model: "BAAI/bge-m3"
     batch_size: 32
 
 executor:
