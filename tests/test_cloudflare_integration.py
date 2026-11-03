@@ -21,6 +21,52 @@ def test_invalid_citation_rejects_only_its_paper_not_valid_batch_peers():
     assert result[0]['reference_keys']==[] and result[0]['validation_error']=='unprovided_reference'
     assert result[1]['reference_keys']==[] and result[2]['reference_keys']==['K']
 
+def test_omitted_paper_is_unverified_without_discarding_valid_peers():
+    module=gate_module()
+    batch={'saved_research_context':[{'key':'K'}], 'candidates':[
+        {'id':p,'abstract':'Visual SLAM','references':[{'key':'K'}]} for p in ('P1','P2')]}
+    result=module.parse_relevance_decisions(json.dumps({'decisions':[
+        {'id':'P1','relation':'direct','reference_keys':['K'],'reason':'直接研究视觉定位'}]}),batch)
+    assert result[0]['relation']=='direct'
+    assert result[1]['id']=='P2' and result[1]['relation']=='weak'
+    assert result[1]['validation_error']=='missing_decision' and result[1]['reference_keys']==[]
+
+def test_semantic_validation_faults_cannot_promote_or_abort_valid_peers():
+    module=gate_module()
+    batch={'saved_research_context':[{'key':'K'}], 'candidates':[
+        {'id':p,'abstract':'Visual SLAM','references':[{'key':'K'}]} for p in ('P1','P2','P3','P4')]}
+    payload={'decisions':[
+        {'id':'P1','relation':'unknown','reference_keys':['K'],'reason':'相关'},
+        {'id':'P2','relation':'direct','reference_keys':['K'],'reason':'Related'},
+        {'id':'P3','relation':'direct','reference_keys':[{'key':'K'}],'reason':'相关'},
+        {'id':'P4','relation':'direct','reference_keys':['K'],'reason':'直接研究视觉定位'}]}
+    result=module.parse_relevance_decisions(json.dumps(payload),batch)
+    assert [d['relation'] for d in result]==['weak','weak','weak','direct']
+    assert all(d['validation_error'] and d['reference_keys']==[] for d in result[:3])
+
+def test_independent_review_sends_repeated_reference_abstract_only_once(monkeypatch):
+    module=gate_module()
+    monkeypatch.setenv('PAPERFLOW_RELEVANCE_REVIEW_MODEL','@cf/openai/gpt-oss-120b')
+    calls=[]
+    abstract='Visual localization through geometric matching. '*50
+    def create(**kw):
+        wire=json.loads(kw['messages'][1]['content']);calls.append(wire)
+        key=wire['saved_research_context'][0]['key']
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(
+            {'decisions':[{'id':p['id'],'relation':'direct','reference_keys':[key],'reason':'直接研究视觉定位'}
+                          for p in wire['candidates']]})))])
+    client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    state={'similarity_corpus':[{'key':'K','title':'Visual SLAM','abstract':abstract,'weight':1.0}]}
+    papers=[{'arxiv_id':p,'title':'Visual matching','abstract':'Geometric localization',
+             'zotero_matches':[{'key':'K','title':'Visual SLAM'}]} for p in ('P1','P2')]
+    out=module.screen_zotero_relevance(papers,state,client=client)
+    assert len(out)==2 and len(calls)==2
+    review=calls[1]
+    assert len(review['reference_catalog'])==1
+    assert review['reference_catalog'][0]['abstract']==abstract[:1800]
+    assert 'abstract' not in review['saved_research_context'][0]
+    assert review['candidates'][0]['references']==[{'key':'R1'}]
+
 def test_cloudflare_gate_disables_hidden_reasoning(monkeypatch):
     module=gate_module()
     monkeypatch.setenv('OPENAI_BASE_URL','https://api.cloudflare.com/client/v4/accounts/test/ai/v1')

@@ -102,20 +102,31 @@ def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
     payload = json.loads(text)
     decisions = payload.get("decisions", [])
     candidates = {p["id"]: p for p in batch["candidates"]}
-    if len(decisions) != len(candidates) or {d.get("id") for d in decisions} != set(candidates):
-        actual = [d.get("id") for d in decisions]
+    actual = [d.get("id") for d in decisions]
+    if not actual or len(actual) != len(set(actual)) or not set(actual).issubset(candidates):
         raise RuntimeError(
             f"Relevance gate returned missing, extra or duplicate candidate IDs: expected {list(candidates)}, got {actual}"
         )
+    # A partially omitted item has no validated association. Preserve the
+    # independently keyed valid peers, and never invent a recommendation for it.
+    decisions.extend({'id':key, 'relation':'weak', 'reference_keys':[],
+                      'validation_error':'missing_decision',
+                      'reason':'关联未验证：模型遗漏本篇审查，不作为正式推荐。'}
+                     for key in candidates if key not in actual)
     for d in decisions:
         if d.get("relation") not in {"direct", "method", "weak", "unrelated"}:
-            raise RuntimeError("Invalid relevance relation")
+            d.update(relation='weak', reference_keys=[], transfer={},
+                     validation_error='invalid_relation',
+                     reason='关联未验证：模型分类无效，不作为正式推荐。')
+            continue
         if d["relation"] in {"direct", "method"}:
             supplied = {r["key"] for r in candidates[d["id"]]["references"]} | {
                 r["key"] for r in batch.get("saved_research_context", [])
             }
             cited = d.get("reference_keys")
-            if not isinstance(cited, list) or not cited or not set(cited).issubset(supplied):
+            if (not isinstance(cited, list) or not cited
+                    or not all(isinstance(key, str) for key in cited)
+                    or not set(cited).issubset(supplied)):
                 # Reject this ungrounded association without discarding valid
                 # peers. Never keep the fabricated citation or its rationale.
                 d.update(relation='weak', reference_keys=[], transfer={},
@@ -123,9 +134,12 @@ def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
                          reason='关联未验证：模型未引用本篇可用的真实 Zotero 依据，不作为正式推荐。')
                 continue
             if not re.search(r"[\u4e00-\u9fff]", str(d.get("reason", ""))):
-                raise RuntimeError("Relevance gate must provide a Chinese grounded reason")
+                d.update(relation='weak', reference_keys=[], transfer={},
+                         validation_error='invalid_reason',
+                         reason='关联未验证：缺少可核对的中文关联说明，不作为正式推荐。')
+                continue
             if d['relation']=='method':
-                t=d.get('transfer') or {}
+                t=d.get('transfer') if isinstance(d.get('transfer'), dict) else {}
                 quote=re.sub(r'\s+',' ',str(t.get('evidence_quote',''))).strip()
                 abstract=re.sub(r'\s+',' ',candidates[d['id']].get('abstract',''))
                 if quote.casefold() not in abstract.casefold():
@@ -144,7 +158,7 @@ def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
     return decisions
 
 
-def _wire_batch(batch: dict) -> tuple[dict, dict, dict]:
+def _wire_batch(batch: dict, *, compact_references: bool = False) -> tuple[dict, dict, dict]:
     """Use short opaque IDs so the model cannot 'correct' real arXiv IDs.
 
     The exact reverse mapping is owned by code, not guessed by the model.
@@ -163,6 +177,23 @@ def _wire_batch(batch: dict) -> tuple[dict, dict, dict]:
         candidate["id"] = f"P{i}"
         for r in candidate["references"]:
             r["key"] = reverse_refs[r["key"]]
+    if compact_references:
+        # Lossless normalization: the same saved abstract can otherwise be
+        # repeated in every candidate. Keep the longest supplied excerpt once;
+        # candidate and recent-context keys still retain their exact mappings.
+        catalog = {}
+        records = wire.get('saved_research_context', []) + [
+            r for candidate in wire['candidates'] for r in candidate['references']]
+        for record in records:
+            key = record['key']
+            item = catalog.setdefault(key, copy.deepcopy(record))
+            if len(record.get('abstract', '')) > len(item.get('abstract', '')):
+                item['abstract'] = record['abstract']
+        for record in wire.get('saved_research_context', []):
+            record.pop('abstract', None)
+        for candidate in wire['candidates']:
+            candidate['references'] = [{'key':r['key']} for r in candidate['references']]
+        wire['reference_catalog'] = list(catalog.values())
     return wire, ids, refs
 
 
@@ -182,9 +213,10 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
     model = os.environ.get("PAPERFLOW_LLM_MODEL", "deepseek-ai/DeepSeek-V3.2")
 
     def run(batch, model_override=None):
-        wire, ids, refs = _wire_batch(batch)
+        wire, ids, refs = _wire_batch(batch, compact_references=bool(model_override))
         titles = {r["key"]: r["title"] for r in wire.get("saved_research_context", [])}
-        titles.update({r["key"]: r["title"] for p in wire["candidates"] for r in p["references"]})
+        titles.update({r['key']:r['title'] for r in wire.get('reference_catalog', [])})
+        titles.update({r["key"]: r["title"] for p in wire["candidates"] for r in p["references"] if 'title' in r})
         last_error = None
         for _ in range(2):
             try:
@@ -200,16 +232,18 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
                     else {},
                     **({"reasoning_effort": "low"} if model_override else {}),
                     messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": SYSTEM_PROMPT +
+                         ('\n参考文献摘要按 key 集中存放在 reference_catalog，references 和 saved_research_context 中同名 key 指向该原文；请据此核对，不要求重复出现摘要。'
+                          if model_override else '')},
                         {"role": "user", "content": json.dumps(wire, ensure_ascii=False)},
                     ],
                 )
-                decisions = parse_relevance_decisions(response.choices[0].message.content or "", wire)
                 usage = getattr(response, "usage", None)
                 if usage is not None:
                     print(f"Model usage: input={getattr(usage, 'prompt_tokens', 0)}, "
                           f"output={getattr(usage, 'completion_tokens', 0)}, "
                           f"neurons={getattr(usage, 'neurons', None)}", flush=True)
+                decisions = parse_relevance_decisions(response.choices[0].message.content or "", wire)
                 for d in decisions:
                     d["id"] = ids[d["id"]]
                     d["reference_keys"] = [refs[key] for key in d.get("reference_keys", []) if key in refs]
@@ -221,7 +255,7 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
                 kept = sum(d["relation"] in {"direct", "method"} for d in decisions)
                 invalid = sum(bool(d.get('validation_error')) for d in decisions)
                 print(
-                    f"Grounded relevance batch checked: {len(decisions)} candidates, {kept} task/method matches, {invalid} unverified citations rejected",
+                    f"Grounded relevance batch checked: {len(decisions)} candidates, {kept} task/method matches, {invalid} unverified items rejected",
                     flush=True,
                 )
                 return decisions

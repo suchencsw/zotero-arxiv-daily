@@ -20,7 +20,13 @@ stable corpus weighting. Maximums remain 100 candidates and 30 outputs.
 
 GLM thinking is disabled using `chat_template_kwargs.enable_thinking=false`;
 the independent reviewer uses low reasoning effort. Logs record model token
-and neuron usage. All three models and both projects share the account's daily
+and neuron usage. Review prompts keep repeated reference abstracts once in a
+keyed catalog while preserving every supplied reference. Invalid or omitted
+per-paper decisions stay unverified; they cannot become formal recommendations
+or discard valid peers. Malformed responses, ambiguous IDs and API failures
+still fail the run without claiming delivery.
+
+All three models and both projects share the account's daily
 free allocation. There is no paid provider fallback, but Cloudflare account
 billing settings still apply. Keep a free plan if relying on quota exhaustion
 to stop requests rather than incur charges.
