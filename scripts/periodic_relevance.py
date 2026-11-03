@@ -123,9 +123,19 @@ def parse_relevance_decisions(content: str, batch: dict) -> list[dict]:
                 t=d.get('transfer') or {}
                 quote=re.sub(r'\s+',' ',str(t.get('evidence_quote',''))).strip()
                 abstract=re.sub(r'\s+',' ',candidates[d['id']].get('abstract',''))
+                if quote.casefold() not in abstract.casefold():
+                    first = re.split(r'\.{3}|…', quote, maxsplit=1)[0].strip()
+                    if len(first) >= 40 and first.casefold() in abstract.casefold():
+                        # Retain only the independently verifiable continuous
+                        # excerpt, never an invented/omitted continuation.
+                        quote = first
                 if (not t.get('source_mechanism') or not t.get('target_component')
-                        or not 8<=len(quote)<=180 or quote.casefold() not in abstract.casefold()):
+                        or len(quote)<8 or quote.casefold() not in abstract.casefold()):
                     d.update(relation='weak',reason='缺少可核对的具体迁移机制证据；'+str(d.get('reason','')))
+                else:
+                    # Validate the complete quote first; 180 is a display limit,
+                    # not a reason to reject genuine 184-character evidence.
+                    t['evidence_quote'] = quote[:180]
     return decisions
 
 
@@ -166,7 +176,7 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
     batches = build_relevance_batches(papers, state)
     model = os.environ.get("PAPERFLOW_LLM_MODEL", "deepseek-ai/DeepSeek-V3.2")
 
-    def run(batch):
+    def run(batch, model_override=None):
         wire, ids, refs = _wire_batch(batch)
         titles = {r["key"]: r["title"] for r in wire.get("saved_research_context", [])}
         titles.update({r["key"]: r["title"] for p in wire["candidates"] for r in p["references"]})
@@ -174,19 +184,27 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
         for _ in range(2):
             try:
                 response = client.chat.completions.create(
-                    model=model,
+                    model=model_override or model,
                     temperature=0,
                     max_tokens=4096,
                     response_format={"type": "json_object"},
                     extra_body={"enable_thinking": False}
                     if "siliconflow.cn" in os.environ.get("OPENAI_BASE_URL", "")
+                    else {"chat_template_kwargs": {"enable_thinking": False}}
+                    if "api.cloudflare.com/" in os.environ.get("OPENAI_BASE_URL", "") and not model_override
                     else {},
+                    **({"reasoning_effort": "low"} if model_override else {}),
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": json.dumps(wire, ensure_ascii=False)},
                     ],
                 )
                 decisions = parse_relevance_decisions(response.choices[0].message.content or "", wire)
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    print(f"Model usage: input={getattr(usage, 'prompt_tokens', 0)}, "
+                          f"output={getattr(usage, 'completion_tokens', 0)}, "
+                          f"neurons={getattr(usage, 'neurons', None)}", flush=True)
                 for d in decisions:
                     d["id"] = ids[d["id"]]
                     d["reference_keys"] = [refs[key] for key in d.get("reference_keys", []) if key in refs]
@@ -210,4 +228,14 @@ def screen_zotero_relevance(papers: list[dict], state: dict, *, client: Any = No
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         groups = list(executor.map(run, batches))
-    return {d["id"]: d for group in groups for d in group}
+    decisions = {d["id"]: d for group in groups for d in group}
+    review_model = os.environ.get('PAPERFLOW_RELEVANCE_REVIEW_MODEL', '')
+    if review_model:
+        accepted = [p for p in papers if decisions[p['arxiv_id']]['relation'] in {'direct','method'}]
+        reviews = build_relevance_batches(accepted, state)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            verified = list(executor.map(lambda b: run(b, review_model), reviews))
+        # Independent review may veto acceptance; never rescue a rejected paper
+        # merely to fill the quota or change the similarity ordering.
+        decisions.update({d['id']: d for group in verified for d in group})
+    return decisions

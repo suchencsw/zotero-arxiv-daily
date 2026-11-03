@@ -44,7 +44,8 @@ jobs:
       ARXIV_BATCH_CATEGORIES: "cs.CV,cs.RO,cs.GR,cs.AI,cs.LG,astro-ph.EP,astro-ph.IM,eess.IV"
       EMAIL_RECENT_WEIGHTING: "recent_mixture"
       EMAIL_RELEVANCE_GATE: "true"
-      PAPERFLOW_LLM_MODEL: "deepseek-ai/DeepSeek-V3.2"
+      PAPERFLOW_LLM_MODEL: "@cf/zai-org/glm-4.7-flash"
+      PAPERFLOW_RELEVANCE_REVIEW_MODEL: "@cf/openai/gpt-oss-120b"
       PAPERFLOW_RESEARCH_SCOPE: "视觉导航、几何计算机视觉、行星探测、具身智能、SLAM、三维重建"
       ARXIV_FORCE_SEND: ${{ inputs.force_send && 'true' || 'false' }}
     steps:
@@ -74,9 +75,9 @@ jobs:
           SENDER: ${{ secrets.SENDER }}
           RECEIVER: ${{ secrets.RECEIVER }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_API_BASE }}
+          OPENAI_API_KEY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          OPENAI_API_BASE: "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/ai/v1"
+          OPENAI_BASE_URL: "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/ai/v1"
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
           EMAIL_EMPTY_ALREADY_SENT: ${{ steps.delivery_guard.outputs.empty_already_sent }}
         run: |

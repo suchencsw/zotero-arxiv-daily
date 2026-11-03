@@ -19,6 +19,19 @@ W = worker
 NOW = datetime(2026, 10, 11, 8, tzinfo=timezone.utc)
 
 
+
+def test_periodic_waits_for_unfinished_daily_batches(monkeypatch):
+    monkeypatch.setenv('PERIODIC_WAIT_FOR_DAILY','true')
+    monkeypatch.setattr(sys,'argv',['periodic_review.py','--channel','email'])
+    class DailyLedger:
+        def __init__(self,*args,**kwargs):
+            self.daily=kwargs.get('state_file')=='announcement-ledger.json'
+        def load(self):
+            assert self.daily, 'Periodic computation must wait behind daily recovery'
+            return {'batches':{'b':{'date':'2026-10-19','count':100}}},None
+    monkeypatch.setattr(W,'Ledger',DailyLedger)
+    W.main()
+
 @pytest.mark.parametrize(("kind", "today", "start", "end"), [
     ("week", "2026-10-12", "2026-10-05", "2026-10-12"),
     ("week", "2026-10-11", "2026-09-28", "2026-10-05"),

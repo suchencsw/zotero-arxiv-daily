@@ -16,7 +16,7 @@ llm:
     base_url: ${oc.env:OPENAI_API_BASE}
   api_mode: chat_completion
   generation_kwargs:
-    model: deepseek-ai/DeepSeek-V3.2
+    model: "@cf/zai-org/glm-4.7-flash"
     max_tokens: 512
   language: Chinese
 
@@ -29,8 +29,8 @@ reranker:
   api:
     key: ${oc.env:OPENAI_API_KEY}
     base_url: ${oc.env:OPENAI_API_BASE}
-    model: BAAI/bge-m3
-    batch_size: 64
+    model: "@cf/baai/bge-m3"
+    batch_size: 32
 
 executor:
   debug: ${oc.env:DEBUG,null}

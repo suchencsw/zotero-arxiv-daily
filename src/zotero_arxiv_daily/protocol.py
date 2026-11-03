@@ -15,12 +15,19 @@ def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) 
     generation_kwargs = dict(llm_params.get("generation_kwargs", {}))
 
     if api_mode == "chat_completion":
+        if 'api.cloudflare.com/' in os.environ.get('OPENAI_BASE_URL',''):
+            generation_kwargs.setdefault('extra_body', {}).update(
+                {'chat_template_kwargs': {'enable_thinking':False}})
         if os.environ.get('EMAIL_RELEVANCE_GATE')=='true' and 'siliconflow.cn' in os.environ.get('OPENAI_BASE_URL',''):
             generation_kwargs.setdefault('extra_body', {'enable_thinking':False})
         response = openai_client.chat.completions.create(
             messages=messages,
             **generation_kwargs,
         )
+        usage = getattr(response, 'usage', None)
+        if usage is not None:
+            logger.info('Model usage: input={}, output={}, neurons={}',
+                getattr(usage,'prompt_tokens',0),getattr(usage,'completion_tokens',0),getattr(usage,'neurons',None))
         return response.choices[0].message.content
 
     if api_mode == "response":
